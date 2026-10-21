@@ -1,0 +1,131 @@
+{
+ "tag": "random_weights",
+ "params": 30807750,
+ "macs_per_window": 1140481280,
+ "size_mb": {
+  "pth_checkpoint": null,
+  "onnx_fp32": 123.399403,
+  "onnx_int8_dynamic": 31.407653,
+  "onnx_int8_static": 32.305336
+ },
+ "parity": {
+  "windows": "synthetic",
+  "onnx fp32": {
+   "max_abs_dp": 0.0002276301383972168,
+   "mean_abs_dp": 6.88316285959445e-05
+  },
+  "onnx int8 dynamic": {
+   "max_abs_dp": 0.0015322566032409668,
+   "mean_abs_dp": 0.0004696225223597139
+  },
+  "onnx int8 static": {
+   "max_abs_dp": 0.0036622285842895508,
+   "mean_abs_dp": 0.0010356217389926314
+  }
+ },
+ "latency": [
+  {
+   "runtime": "torch fp32",
+   "threads": 1,
+   "batch": 1,
+   "ms_per_window": 51.28224199995657
+  },
+  {
+   "runtime": "onnx fp32",
+   "threads": 1,
+   "batch": 1,
+   "ms_per_window": 47.52923149999333
+  },
+  {
+   "runtime": "onnx int8 dynamic",
+   "threads": 1,
+   "batch": 1,
+   "ms_per_window": 138.38261850003164
+  },
+  {
+   "runtime": "onnx int8 static",
+   "threads": 1,
+   "batch": 1,
+   "ms_per_window": 24.89574349999657
+  },
+  {
+   "runtime": "torch fp32",
+   "threads": 1,
+   "batch": 32,
+   "ms_per_window": 34.04733162499696
+  },
+  {
+   "runtime": "onnx fp32",
+   "threads": 1,
+   "batch": 32,
+   "ms_per_window": 45.42321568749941
+  },
+  {
+   "runtime": "onnx int8 dynamic",
+   "threads": 1,
+   "batch": 32,
+   "ms_per_window": 117.89860346874548
+  },
+  {
+   "runtime": "onnx int8 static",
+   "threads": 1,
+   "batch": 32,
+   "ms_per_window": 21.80061462500049
+  },
+  {
+   "runtime": "torch fp32",
+   "threads": 4,
+   "batch": 1,
+   "ms_per_window": 45.97583500003566
+  },
+  {
+   "runtime": "onnx fp32",
+   "threads": 4,
+   "batch": 1,
+   "ms_per_window": 27.716508000025897
+  },
+  {
+   "runtime": "onnx int8 dynamic",
+   "threads": 4,
+   "batch": 1,
+   "ms_per_window": 57.55155250005828
+  },
+  {
+   "runtime": "onnx int8 static",
+   "threads": 4,
+   "batch": 1,
+   "ms_per_window": 19.07057149992397
+  },
+  {
+   "runtime": "torch fp32",
+   "threads": 4,
+   "batch": 32,
+   "ms_per_window": 12.001974250004821
+  },
+  {
+   "runtime": "onnx fp32",
+   "threads": 4,
+   "batch": 32,
+   "ms_per_window": 14.305889937496374
+  },
+  {
+   "runtime": "onnx int8 dynamic",
+   "threads": 4,
+   "batch": 32,
+   "ms_per_window": 53.39512631249477
+  },
+  {
+   "runtime": "onnx int8 static",
+   "threads": 4,
+   "batch": 32,
+   "ms_per_window": 12.340378281251674
+  }
+ ],
+ "preprocess_ms_per_window": 8.434108031252663,
+ "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+ "threads_available": 4,
+ "versions": {
+  "torch": "2.14.1+cu130",
+  "onnxruntime": "1.31.0"
+ }
+}

@@ -101,6 +101,22 @@ system-update restarts at night if you can, and keep at least 20 GB free.
 
 ## Files and format
 
+### Contract between app and analysis
+
+`analysis/ecgpipe` reads these files with loaders that expect exactly these
+layouts. Each file starts with one header line, then comma-separated rows
+in this column order and with these units:
+
+| file (hourly) | columns | units / values |
+|---|---|---|
+| `ecg_*.csv` | `timestamp_ns,ecg_mV,pulse_bpm,rr_ms,marker` | ECGLogger layout: Unix ns, mV, bpm, ms, `1` or empty |
+| `acc_*.csv` | `timestamp_ns,x_mG,y_mG,z_mG` | Unix ns, milli-g (integers) |
+| `hr_*.csv` | `timestamp_ns,hr_bpm,rr_ms,contact,contact_supported` | Unix ns, bpm, ms (may be empty), `0`/`1`, `0`/`1` |
+
+The headers are defined once, in `core/.../RecordingFiles.kt`, and the unit
+tests check them. Changing a column means changing the analysis loaders in
+the same PR.
+
 All files are in app-specific storage:
 
 ```

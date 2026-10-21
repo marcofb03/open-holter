@@ -16,17 +16,46 @@ days or weeks. Commercial long-term monitors are expensive, rarely give you
 your raw data, or need a prescription. The Polar H10 (~€90) streams a clean
 single-lead ECG at 130 Hz; with a dedicated phone it can record for weeks.
 
-## How it fits together
+## Project overview
 
 ```
-Polar H10 ──Bluetooth──► Android app (records 24/7, marker button)
-                              │
-                              ▼
-                     analysis (beats, extra beats, runs, pauses, rate)
-                              │
-                              ▼
-                   HTML/PDF report with ECG strips ──► cardiologist
+ Polar H10 chest strap           Android phone (android/)            Analysis (analysis/)
+ 1 lead, 130 Hz ECG,     BLE     records 24/7, marker button,  CSV   beats → extra beats → events
+ motion, skin contact  ───────►  hourly CSV files on the phone ────► confidence, artefact checks
+                                                                      │
+                                                                      ▼
+                                              HTML report with raw ECG strips ──► cardiologist
 ```
+
+1. **Record.** The [Android app](android/README.md) streams the H10 to a
+   dedicated phone and writes hourly files: ECG (ECGLogger layout), motion and
+   the H10's heart rate / skin contact. You press **Mark symptom** when you feel
+   something.
+2. **Analyse.** The [analysis](analysis/README.md) finds every heartbeat, labels
+   it (N normal, S atrial-like early, V ventricular-like, Q unreadable), groups
+   them into events (couplets, runs, pauses, fast rate, your markers), and gives
+   each event a confidence based on noise, motion and skin contact. It runs on a
+   computer today and will move onto the phone.
+3. **Review.** The report shows the **raw** ECG strip of every event, so a
+   cardiologist can confirm or dismiss it quickly.
+4. **AI (in progress).** Open models (ECGFounder, heartKIT) are being benchmarked
+   against the rules on public cardiologist-annotated databases to pick a
+   second reader for the phone.
+
+### Repository map
+
+| Path | What it is |
+|---|---|
+| `android/` | Kotlin app (Polar BLE SDK). `core/` holds file writers and recording logic (unit-tested), `app/` the service and screens. CI builds the APK. |
+| `analysis/ecgpipe/` | Python analysis: loading, beat detection and labels, events, confidence, HTML report. |
+| `analysis/tests/`, `analysis/tools/` | Synthetic tests (run in CI) and validation on PhysioNet databases. |
+| `analysis/VALIDATION.md` | Accuracy on held-out data, including where it is weak. |
+| `ai/` | Open AI second readers (ECGFounder, heartKIT) and the cross-system benchmark; results in `ai/benchmark/RESULTS.md`. |
+| `.github/workflows/` | Automatic checks: analysis tests, AI tests and Android build. |
+| `data/`, `reports/` | Local only, never committed: your recordings, downloaded datasets, generated reports. |
+
+The file formats shared by app and analysis are the contract between the two
+parts; they are documented in [android/README.md](android/README.md#files-and-format).
 
 ## Status
 
@@ -54,5 +83,4 @@ Recordings and reports are health data. They are ignored by git
 
 ## Licence
 
-MIT. Third-party components keep their own licences (e.g. Polar BLE SDK,
-NeuroKit2).
+MIT. Third-party components keep their own licences (e.g. Polar BLE SDK).

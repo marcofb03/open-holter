@@ -36,3 +36,4 @@ ai/**/weights/
 *.pth
 *.pt
 *.onnx
+*.tflite

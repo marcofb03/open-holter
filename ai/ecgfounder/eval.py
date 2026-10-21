@@ -18,7 +18,7 @@ Window ground truth (from the cardiologists' beat and rhythm annotations):
     sve        >= 1 supraventricular ectopic beat (A, a, J, S)
     vrun       >= 3 consecutive V beats inside the window (VT / V run)
     svt        >= 3 consecutive S beats inside, or >= 2 s of an (SVTA episode
-    af         >= 50 % of the window in (AFIB or (AFL; 0 % = negative
+    af         >= 50 % of the window in (AFIB, (AFL or (WPWAF (INCART); 0 % = negative
     sinus      whole window in a sinus rhythm ((N, (SBR, (B, (T; ectopy allowed);
                negative = >= 50 % in AF, flutter, SVT, VT, nodal or idioventricular
     brady      window fully in (N/(SBR, all beats normal, mean rate < 60 bpm
@@ -28,7 +28,9 @@ Beats within 0.3 s of a window edge, runs only partly inside, and windows with
 a partial AF overlap are "ambiguous" and left out of that target (not counted
 as negative). Windows touching ventricular flutter/fibrillation are left out
 of the beat targets, which have no beat annotations there. Rhythm targets
-need rhythm annotations, which INCART lacks.
+(af, sinus, brady, tachy, and the (SVTA part of svt) need rhythm annotations:
+all MIT-BIH records have them, SVDB's .atr files do not (svt there comes from
+S runs only), and only 6 INCART records do.
 
 Each target is scored with a label group from infer.GROUPS. The threshold
 per target is the max-F1 point on MIT-BIH DS1. Windows overlap and come from
@@ -81,7 +83,8 @@ V_CLASS = set("VE")
 BEATS = N_CLASS | S_CLASS | V_CLASS | set("F/fQ")
 # Rhythm annotation codes (MIT-BIH style). Bigeminy/trigeminy are sinus with ectopy.
 SINUS_RHYTHMS = {"N", "SBR", "B", "T"}
-NON_SINUS_RHYTHMS = {"AFIB", "AFL", "SVTA", "VT", "VFL", "NOD", "IVR", "AB"}
+NON_SINUS_RHYTHMS = {"AFIB", "AFL", "WPWAF", "SVTA", "VT", "VFL", "NOD", "IVR", "AB"}
+AF_RHYTHMS = {"AFIB", "AFL", "WPWAF"}  # WPWAF: AF with pre-excitation (INCART)
 BEAT_TARGETS = ("pvc", "sve", "vrun", "svt", "pause")
 
 # target -> label group from infer.GROUPS used as its score
@@ -239,7 +242,7 @@ def window_truth(ann, fs: float, n_samples: int, t_start: np.ndarray) -> dict[st
                 svt = 1
             elif ov.get("SVTA", 0.0) > 0 and svt == 0:
                 svt = np.nan
-            af = ov.get("AFIB", 0.0) + ov.get("AFL", 0.0)
+            af = sum(ov.get(r, 0.0) for r in AF_RHYTHMS)
             out["af"][i] = 1 if af >= W / 2 else (0 if af == 0 else np.nan)
 
             sinus_s = sum(ov.get(r, 0.0) for r in SINUS_RHYTHMS)

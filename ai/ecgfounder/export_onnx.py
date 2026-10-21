@@ -7,7 +7,7 @@ Writes (git-ignored) weights/ecgfounder_1lead_{fp32,int8,int8_static}.onnx and
 results/<tag>/phone.json + phone.md with model size, multiply-accumulates per
 window, fp32 parity, int8 drift and CPU latency for batch 1 and batch 32 at 1
 and all threads. int8 comes in two flavours: dynamic (weights only, activations
-quantised at run time) and static QDQ (activations calibrated on 32 windows).
+quantised at run time) and static QDQ (activations calibrated on 64 MIT-BIH DS1 windows).
 
 The accuracy of the int8 model on the databases is measured separately with
     python eval.py --backend onnx --onnx weights/ecgfounder_1lead_int8_static.onnx --tag int8_static
@@ -58,17 +58,59 @@ def count_macs(model) -> int:
     return macs
 
 
+class _StaticPads:
+    """Export Net1D's pad-same layers in a form onnxruntime optimises correctly.
+
+    net1d.py zero-pads, then max-pools. Once constant folding has resolved the
+    pad sizes, onnxruntime fuses that Pad into MaxPool's own `pads`, which pad
+    with -inf, not 0. From the first odd length on (625 samples, stage 3) the
+    last pooled value then differs whenever it is negative: measured max
+    |logit difference| 0.80, |Δp| up to 0.17 against torch. Here the max-pool
+    pad is written as a Concat of zeros (not fusable), and the conv pads are
+    frozen as constants (the input length is fixed at 5,000 samples). The
+    maths is unchanged; the vendored file stays untouched.
+    """
+
+    def __enter__(self):
+        import torch
+        import torch.nn.functional as F
+        from net1d import MyConv1dPadSame, MyMaxPool1dPadSame
+
+        def conv_forward(m, x):
+            n = int(x.shape[-1])
+            out = (n + m.stride - 1) // m.stride
+            p = max(0, (out - 1) * m.stride + m.kernel_size - n)
+            return m.conv(F.pad(x, (p // 2, p - p // 2), "constant", 0))
+
+        def pool_forward(m, x):
+            p = max(0, m.kernel_size - 1)
+            z = x[..., :1] * 0
+            x = torch.cat([z] * (p // 2) + [x] + [z] * (p - p // 2), dim=-1)
+            return m.max_pool(x)
+
+        self.saved = (MyConv1dPadSame.forward, MyMaxPool1dPadSame.forward)
+        self.classes = (MyConv1dPadSame, MyMaxPool1dPadSame)
+        MyConv1dPadSame.forward, MyMaxPool1dPadSame.forward = conv_forward, pool_forward
+        return self
+
+    def __exit__(self, *exc):
+        self.classes[0].forward, self.classes[1].forward = self.saved
+
+
 def export(model, path: Path) -> None:
+    import warnings
+
     import torch
 
     x = torch.randn(2, 1, infer.WIN)
-    kw = dict(input_names=["ecg"], output_names=["logits"], opset_version=17)
-    try:
-        torch.onnx.export(model, (x,), str(path), dynamo=False,
-                          dynamic_axes={"ecg": {0: "batch"}, "logits": {0: "batch"}}, **kw)
-    except TypeError:  # older torch without the dynamo switch
-        torch.onnx.export(model, (x,), str(path),
-                          dynamic_axes={"ecg": {0: "batch"}, "logits": {0: "batch"}}, **kw)
+    kw = dict(input_names=["ecg"], output_names=["logits"], opset_version=17,
+              dynamic_axes={"ecg": {0: "batch"}, "logits": {0: "batch"}})
+    with _StaticPads(), warnings.catch_warnings():
+        warnings.simplefilter("ignore", torch.jit.TracerWarning)  # int(x.shape[-1]) is intended
+        try:
+            torch.onnx.export(model, (x,), str(path), dynamo=False, **kw)
+        except TypeError:  # older torch without the dynamo switch
+            torch.onnx.export(model, (x,), str(path), **kw)
 
 
 def quantise(src: Path, dst: Path, calib: np.ndarray | None = None) -> None:
@@ -111,21 +153,37 @@ def bench(fn, x: np.ndarray, reps: int, warmup: int = 2) -> float:
     return float(np.median(ts))
 
 
-def sample_windows(n: int) -> np.ndarray:
-    """Preprocessed windows from a real record if one is around, else synthetic ECG-ish noise."""
+def sample_windows(n: int) -> tuple[np.ndarray, np.ndarray, str]:
+    """(calibration, test) preprocessed windows, n each.
+
+    Real H10-like windows when MIT-BIH is on disk: calibration from the DS1
+    (development) records, test from DS2, so int8 calibration never sees the
+    held-out data. Otherwise synthetic ECG-like spikes (size/latency only).
+    """
     try:
         import wfdb
 
-        rec = wfdb.rdrecord(str(infer.HERE.parents[1] / "data" / "mitdb" / "208"))
-        x = infer.resample_to_500(rec.p_signal[:, 0], rec.fs)
-        st = infer.window_starts(len(x))[:n]
-        return infer.preprocess_windows(np.stack([x[s:s + infer.WIN] for s in st])), "mitdb/208"
+        import eval as ev
+
+        out = []
+        for recs in (sorted(ev.DS1), sorted(set(ev.records("mitdb", ev.REPO / "data" / "mitdb")) - ev.DS1)):
+            per = -(-n // len(recs))
+            ws = []
+            for r in recs:
+                rec = wfdb.rdrecord(str(ev.REPO / "data" / "mitdb" / r))
+                ch = rec.sig_name.index("MLII") if "MLII" in rec.sig_name else 0
+                x = infer.resample_to_500(ev.h10_like(rec.p_signal[:, ch], rec.fs), ev.H10_FS)
+                st = infer.window_starts(len(x))
+                st = st[np.linspace(0, len(st) - 1, per).astype(int)]  # spread over the record
+                ws += [x[s:s + infer.WIN] for s in st]
+            out.append(infer.preprocess_windows(np.stack(ws[:n])))
+        return out[0], out[1], "MIT-BIH (calibration DS1, test DS2, H10-like)"
     except Exception:
         rng = np.random.default_rng(0)
         t = np.arange(infer.WIN) / infer.FS
         base = np.sin(2 * np.pi * 1.2 * t) ** 63  # sharp periodic spikes ~ 72 bpm
-        w = base[None] + 0.05 * rng.standard_normal((n, infer.WIN))
-        return infer.preprocess_windows(w), "synthetic"
+        w = infer.preprocess_windows(base[None] + 0.05 * rng.standard_normal((2 * n, infer.WIN)))
+        return w[:n], w[n:], "synthetic"
 
 
 def main() -> None:
@@ -151,8 +209,7 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     macs = count_macs(model)
     export(model, f32)
-    x, src = sample_windows(64)
-    calib, x = x[32:], x[:32]  # calibrate and test on different windows
+    calib, x, src = sample_windows(64)
     quantise(f32, i8)
     quantise(f32, q8, calib)
     with torch.inference_mode():

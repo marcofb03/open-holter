@@ -16,17 +16,19 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ai/ecgfounder
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The tests need neither torch nor the weights nor PhysioNet data:
-      # preprocessing parity, windowing, label groups and ground-truth rules.
+      # The tests need neither torch, TFLite, model weights nor PhysioNet data:
+      # preprocessing parity, windowing, label groups, ground-truth rules and
+      # heartKIT output handling.
       - name: Install
         run: pip install numpy scipy pytest
-      - name: Test
+      - name: Test ecgfounder
+        working-directory: ai/ecgfounder
+        run: python -m pytest -q tests
+      - name: Test heartkit
+        working-directory: ai/heartkit
         run: python -m pytest -q tests

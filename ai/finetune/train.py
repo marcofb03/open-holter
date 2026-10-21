@@ -94,13 +94,14 @@ def validate(net, name: str, stream: shards.ChunkStream, max_chunks: int, bf16: 
     import torch
 
     kind = models.KIND[name]
+    dev = next(net.parameters()).device
     net.eval()
     ys, ss = [], []
-    with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16, enabled=bf16):
+    with torch.inference_mode(), torch.autocast(dev.type, dtype=torch.bfloat16, enabled=bf16):
         for k in range(min(max_chunks, len(stream.index))):
             x, y = stream.read(k, 0)  # fixed chunks: comparable across validations
-            out = net(torch.from_numpy(x)).float()
-            ss.append((torch.sigmoid(out) if kind == "win" else torch.softmax(out, 1)).numpy())
+            out = net(torch.from_numpy(x).to(dev)).float()
+            ss.append((torch.sigmoid(out) if kind == "win" else torch.softmax(out, 1)).cpu().numpy())
             ys.append(y)
     net.train()
     if not ys:
@@ -214,7 +215,7 @@ def main() -> None:
         if step >= total:
             break
         xb = torch.from_numpy(x).to(args.device)
-        with torch.autocast(args.device if args.device != "cpu" else "cpu", dtype=torch.bfloat16, enabled=args.bf16):
+        with torch.autocast(args.device.split(":")[0], dtype=torch.bfloat16, enabled=args.bf16):
             out = net(xb).float()
         if kind == "win":
             yt = torch.from_numpy(y.astype(np.float32)).to(args.device)

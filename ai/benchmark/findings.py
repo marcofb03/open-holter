@@ -7,7 +7,8 @@ Findings (reference from the databases' annotations; see datasets.py):
            (SHDB-AF also NOD) episode >= 30 s
     pvc    frequent PVCs: V beats >= 1 % of all beats of the patient
     pac    frequent PACs: S beats >= 1 % of all beats
-    pause  pause / asystole: an RR interval > 3 s between two readable beats
+    pause  pause / asystole: an RR interval > 3 s between two readable beats, outside
+           annotated unreadable spans ('~' marks) and VF
     brady  HR < 40 bpm (8-beat running median) for >= 10 s
     tachy  HR > 150 bpm (8-beat running median) for >= 10 s, any rhythm
 
@@ -157,9 +158,11 @@ def ref_findings(d: dict) -> dict:
         for a, b in vf:
             in_vf |= (bt >= a) & (bt <= b)
         hr = running_hr(bt, good & ~in_vf)
-        p_ref = [p for p in pauses(bt, good, PAUSE_S) if not any(a <= p[0] <= b for a, b in vf)]
-        p_ok = pauses(bt, np.ones(len(bt), bool), PAUSE_OK_S)
-        brady = rate_stretches(bt, hr, lambda h: h < BRADY, MIN_S["brady"])
+        noise = _spans(rh, {"NOISE"})
+        clean = lambda iv: [e for e in iv if not any(a - TOL <= e[1] and e[0] <= b + TOL for a, b in noise + vf)]  # noqa: E731
+        p_ref = clean(pauses(bt, good, PAUSE_S))
+        p_ok = pauses(bt, np.ones(len(bt), bool), PAUSE_OK_S) + noise  # unreadable: neither true nor false
+        brady = clean(rate_stretches(bt, hr, lambda h: h < BRADY, MIN_S["brady"]))
         brady_ok = rate_stretches(bt, hr, lambda h: h < BRADY_OK, 0.0) + p_ok
         tachy = rate_stretches(bt, hr, lambda h: h > TACHY, MIN_S["tachy"])
         tachy_ok = rate_stretches(bt, hr, lambda h: h > TACHY_OK, 0.0) + vf

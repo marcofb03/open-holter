@@ -60,6 +60,9 @@ def prepare(r: ds.Rec) -> dict | None:
     if not fe.cache_path(r).exists():
         return None
     d = fe.load(r)
+    if r.db != "icentia11k":  # references from the local annotations (picks up later fixes, e.g. '~' spans)
+        rr_ = r if r.db != "nstdb" else ds.Rec("mitdb", r.rec[:3], r.rec[:3], "noise")
+        d["ref"] = ds.reference(rr_, d["fs_in"], int(round(d["dur_s"] * d["fs_in"])))
     hp = fe.CACHE / "clef_head" / r.db / f"{r.rec}.npy"
     ch = np.load(hp).astype(np.float32) if hp.exists() else None
     rr = d["rules"]
@@ -128,7 +131,7 @@ class Atom:
         v = f" {self.var}" if self.var else ""
         if self.var.startswith("burden"):
             return f"{NAMES[self.fam]}{v} ≥ {100 * self.thr:g} %"
-        return f"{NAMES[self.fam]}{v} ≥ {self.thr:g}" if self.thr == self.thr else f"{NAMES[self.fam]}{v}"
+        return f"{NAMES[self.fam]}{v}" if self.thr == NOTHR else f"{NAMES[self.fam]}{v} ≥ {self.thr:g}"
 
 
 def atom_dets(row: dict, f: str, a: Atom):
@@ -181,6 +184,7 @@ def atom_dets(row: dict, f: str, a: Atom):
 
 
 NAN = float("nan")
+NOTHR = -1.0  # atom without a threshold (NaN would never compare equal, breaking caches)
 
 
 def atoms_for(f: str) -> dict[str, list[Atom]]:
@@ -195,14 +199,14 @@ def atoms_for(f: str) -> dict[str, list[Atom]]:
                 "ecgfounder": [Atom("ecgfounder", "burden of windows", b) for b in g["windows"]],
                 "clef": [Atom("clef", "burden of windows", b) for b in g["windows"]]}
     if f == "vt":
-        fm["rules"] = [Atom("rules", "unreadable", 5.0), Atom("rules", "", NAN)]
+        fm["rules"] = [Atom("rules", "unreadable", 5.0), Atom("rules", "", NOTHR)]
         fm["heartkit"] = ([Atom("heartkit", "OR rules", t) for t in (0.3, 0.5)] +
                           [Atom("heartkit", "", t) for t in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)])
     elif f == "af":
         fm["rules"] = [Atom("rules", "", t) for t in (0.3, 0.5, 0.7)]
         fm["heartkit"] = [Atom("heartkit", "", t) for t in (0.3, 0.5, 0.75, 0.9)]
     elif f == "svt":
-        fm["rules"] = [Atom("rules", "rate >", 120.0), Atom("rules", "rate >", 140.0), Atom("rules", "", NAN)]
+        fm["rules"] = [Atom("rules", "rate >", 120.0), Atom("rules", "rate >", 140.0), Atom("rules", "", NOTHR)]
         fm["heartkit"] = [Atom("heartkit", "", t) for t in (0.3, 0.5, 0.7)]
     elif f == "pause":
         fm["rules"] = [Atom("rules", "all beats", 2.5), Atom("rules", "", 2.5), Atom("rules", "", 3.0)]
@@ -235,6 +239,23 @@ class Cand:
     @property
     def n_systems(self) -> int:
         return len({p.fam for p in self.parts})
+
+
+def defaults(f: str) -> dict[str, Atom]:
+    """Each system at its own default operating point (no tuning): rules as merged, heartKIT's
+    configured thresholds (V/S label at 0.5, AF 0.75), ECGFounder / CLEF window probability 0.5
+    (burden: >= 10 % of windows), every burden finding flagged at >= 1 %."""
+    if f in F.BURDEN:
+        return {"rules": Atom("rules", "burden", 0.01), "heartkit": Atom("heartkit", "burden", 0.01),
+                "ecgfounder": Atom("ecgfounder", "burden of windows", 0.1),
+                "clef": Atom("clef", "burden of windows", 0.1)}
+    d = {"ecgfounder": Atom("ecgfounder", "", 0.5), "clef": Atom("clef", "", 0.5)}
+    d["rules"] = {"vt": Atom("rules", "", NOTHR), "af": Atom("rules", "", 0.5), "svt": Atom("rules", "", NOTHR),
+                  "pause": Atom("rules", "", 3.0), "brady": Atom("rules", "", 40.0),
+                  "tachy": Atom("rules", "", 150.0)}[f]
+    if f in ("vt", "svt", "af"):
+        d["heartkit"] = Atom("heartkit", "", 0.75 if f == "af" else 0.5)
+    return d
 
 
 BURDEN_GRID = {"beats": (0.003, 0.005, 0.01, 0.02), "windows": (0.02, 0.05, 0.1, 0.2)}
@@ -418,7 +439,9 @@ def run(rows: list[dict]) -> dict:
             ops.append({"cand": c.label(), "tune": s, "held": ev.score(f, c, held), "chosen": c == choice})
         if not any(o["chosen"] for o in ops):
             ops.append({"cand": choice.label(), "tune": st, "held": ev.score(f, choice, held), "chosen": True})
-        res = {"choice": choice.label(), "n_candidates": len(cands), "tune": st,
+        dflt = {fam: {"cand": Cand("atom", (a,)).label(), "held": ev.score(f, Cand("atom", (a,)), held),
+                      "long": ev.score(f, Cand("atom", (a,)), long_)} for fam, a in defaults(f).items()}
+        res = {"choice": choice.label(), "n_candidates": len(cands), "tune": st, "defaults": dflt,
                "held": ev.score(f, choice, held), "long": ev.score(f, choice, long_),
                "noise": {snr: ev.score(f, choice, [i for i in noise if rows[i]["key"].endswith(snr)])
                          for snr in ds.NST_SNR},
@@ -470,6 +493,15 @@ def report(out: dict) -> str:
             s = r["systems"].get(fam)
             cells.append("–" if s is None else f"{se_cell(s['held'])}; {fmt(s['long']['false_per_day'], 1)}/day<br>"
                          f"<sub>{s['cand']}</sub>")
+        L.append(f"| {TITLE[f]} | " + " | ".join(cells) + " |")
+    L += ["", "### Each system at its default operating point (no tuning; held-out per-patient Se; "
+          "false / day on long recordings)", "",
+          "| finding | " + " | ".join(NAMES.values()) + " |", "|---|" + "---|" * len(NAMES)]
+    for f, r in out["findings"].items():
+        cells = []
+        for fam in NAMES:
+            s = r["defaults"].get(fam)
+            cells.append("–" if s is None else f"{se_cell(s['held'])}; {fmt(s['long']['false_per_day'], 1)}/day")
         L.append(f"| {TITLE[f]} | " + " | ".join(cells) + " |")
     L += ["", "### Operating points (tuning Pareto front; held-out numbers)", ""]
     for f, r in out["findings"].items():

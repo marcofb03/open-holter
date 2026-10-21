@@ -2,6 +2,7 @@
 
     python measure_step.py                     # all threads, writes results/step_timing.{json,md}
     python measure_step.py --threads 48 --tag euler   # same inside a 48-core Euler job
+    python measure_step.py --device cuda --tag gpu    # first 2 minutes on a rented GPU
 
 A step = forward + backward + AdamW update on one batch (ecgfounder / clef:
 64 windows of 10 s at 500 Hz; beat: 512 frames of 640 samples), median of
@@ -39,30 +40,32 @@ def cpu_name() -> str:
     return platform.processor()
 
 
-def step_time(name: str, bf16: bool, reps: int) -> float:
+def step_time(name: str, bf16: bool, reps: int, device: str = "cpu") -> float:
     import torch
 
-    net = models.build(name, pretrained=False)
+    net = models.build(name, pretrained=False).to(device)
     kind = models.KIND[name]
     b = train.BATCH[name]
     L = 5000 if kind == "win" else h10.BEAT
-    x = torch.randn(b, 1, L)
+    x = torch.randn(b, 1, L, device=device)
     if kind == "win":
-        y = torch.randint(0, 2, (b, models.N_WIN)).float()
+        y = torch.randint(0, 2, (b, models.N_WIN), device=device).float()
         lossf = torch.nn.BCEWithLogitsLoss()
     else:
-        y = torch.randint(0, models.N_BEAT, (b,))
+        y = torch.randint(0, models.N_BEAT, (b,), device=device)
         lossf = torch.nn.CrossEntropyLoss()
     opt = torch.optim.AdamW(net.parameters(), lr=1e-4)
     ts = []
     for k in range(reps + 2):
         t = time.perf_counter()
-        with torch.autocast("cpu", dtype=torch.bfloat16, enabled=bf16):
+        with torch.autocast(device.split(":")[0], dtype=torch.bfloat16, enabled=bf16):
             out = net(x).float()
         loss = lossf(out, y)
         opt.zero_grad()
         loss.backward()
         opt.step()
+        if device != "cpu":
+            torch.cuda.synchronize()
         if k >= 2:
             ts.append(time.perf_counter() - t)
     return float(np.median(ts))
@@ -93,13 +96,14 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--tag", default="local")
     ap.add_argument("--models", nargs="+", default=["beat", "ecgfounder", "clef"])
+    ap.add_argument("--device", default="cpu", help="cpu or cuda (rented GPU calibration)")
     args = ap.parse_args()
-    res = {"cpu": cpu_name(), "threads": args.threads, "torch": torch.__version__, "models": {}}
+    res = {"cpu": cpu_name() if args.device == "cpu" else torch.cuda.get_device_name(), "threads": args.threads, "torch": torch.__version__, "models": {}}
     for name in args.models:
         r = {"batch": train.BATCH[name], "pipeline_ms_per_example_1thread": 1000 * pipeline_time(name)}
         torch.set_num_threads(args.threads)
         for bf16 in (False, True):
-            s = step_time(name, bf16, args.reps)
+            s = step_time(name, bf16, args.reps, args.device)
             r["bf16" if bf16 else "fp32"] = {"s_per_step": s, "examples_per_s": r["batch"] / s}
         res["models"][name] = r
         print(name, json.dumps(r), file=sys.stderr, flush=True)

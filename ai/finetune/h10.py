@@ -190,6 +190,14 @@ def segments(x16: np.ndarray, fs: float, t_start: np.ndarray, kind: str) -> np.n
     return xp[s[:, None] + np.arange(L)[None, :]] if len(s) else np.zeros((0, L), np.int16)
 
 
+def frames_130(x130: np.ndarray, centres: np.ndarray) -> np.ndarray:
+    """(n, BEAT) frames of a 130 Hz signal centred on sample indices (edge-padded), for inference."""
+    h = BEAT // 2
+    xp = np.pad(np.asarray(x130, np.float64), (h, h), mode="edge")
+    c = np.asarray(centres, np.int64)
+    return xp[c[:, None] + np.arange(BEAT)[None, :]] if len(c) else np.zeros((0, BEAT))
+
+
 def examples(db: str, x16: np.ndarray, fs: float, ref: dict) -> dict:
     """Every window and beat example of one record (x16: raw16 at the source rate)."""
     dur = len(x16) / fs

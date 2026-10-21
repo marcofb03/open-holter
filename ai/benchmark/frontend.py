@@ -118,7 +118,7 @@ def nstdb_signal(r: ds.Rec) -> tuple[np.ndarray, float, str]:
     return ds.nst_mix(clean.p_signal[:, 0], noise, clean.fs, ann.sample, snr), float(clean.fs), "MLII"
 
 
-def process(r: ds.Rec, keep_raw: bool = False, delete_raw: bool = False) -> tuple[str, float]:
+def process(r: ds.Rec, keep_raw: bool = False, delete_raw: tuple[str, ...] = ()) -> tuple[str, float]:
     from ecgpipe.beats import analyse_beats
 
     import hk
@@ -164,7 +164,7 @@ def process(r: ds.Rec, keep_raw: bool = False, delete_raw: bool = False) -> tupl
     if r.db == "icentia11k" and not keep_raw:
         for e in (".hea", ".dat", ".atr"):
             (ds.DATA / "icentia11k" / f"{r.rec}{e}").unlink(missing_ok=True)
-    elif delete_raw and r.db not in ("mitdb", "nstdb"):  # NSTDB mixes are made from MIT-BIH signals
+    elif r.db in delete_raw:
         (ds.DATA / r.db / f"{r.rec}.dat").unlink(missing_ok=True)
     return r.key, time.perf_counter() - t0
 
@@ -204,22 +204,25 @@ def main() -> None:
     ap.add_argument("--bf16", choices=["", "clef", "all"], default="clef",
                     help="which models run in bfloat16 autocast (default: CLEF only)")
     ap.add_argument("--keep-raw", action="store_true", help="keep downloaded Icentia11k segments")
-    ap.add_argument("--delete-raw", action="store_true",
-                    help="delete each record's .dat once cached (other databases; to save disk)")
+    ap.add_argument("--delete-raw", nargs="*", default=[], metavar="DB",
+                    help="delete each record's .dat once cached, for these databases (to save disk)")
     ap.add_argument("--max-hours", type=float, default=None, help="stop submitting after this many hours")
+    ap.add_argument("--reverse", action="store_true", help="process the list from the end (a second run in parallel)")
     ap.add_argument("--check-bf16", metavar="DB/REC")
     args = ap.parse_args()
     if args.check_bf16:
         return check_bf16(args.check_bf16)
 
     todo = [r for r in ds.records(args.db) if not cache_path(r).exists()]
+    if args.reverse:
+        todo = todo[::-1]
     print(f"{len(todo)} records to process", file=sys.stderr, flush=True)
     t_end = time.time() + 3600 * args.max_hours if args.max_hours else None
     with ProcessPoolExecutor(args.jobs, initializer=_init, initargs=(1, args.bf16)) as ex:
         futs = {}
         it = iter(todo)
         for r in it:  # keep the pool busy without queuing everything (so --max-hours can stop)
-            futs[ex.submit(process, r, args.keep_raw, args.delete_raw)] = r
+            futs[ex.submit(process, r, args.keep_raw, tuple(args.delete_raw))] = r
             if len(futs) >= 2 * args.jobs:
                 break
         while futs:
@@ -231,9 +234,9 @@ def main() -> None:
             except Exception as e:  # report and continue; the record is retried next run
                 print(f"FAILED {r.key}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             if t_end is None or time.time() < t_end:
-                nxt = next(it, None)
+                nxt = next((x for x in it if not cache_path(x).exists()), None)  # another run may have done it
                 if nxt is not None:
-                    futs[ex.submit(process, nxt, args.keep_raw, args.delete_raw)] = nxt
+                    futs[ex.submit(process, nxt, args.keep_raw, tuple(args.delete_raw))] = nxt
 
 
 if __name__ == "__main__":

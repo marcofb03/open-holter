@@ -258,6 +258,19 @@ def reference_from_ann(db: str, ann, fs: float, n_samples: int) -> dict:
     for k in np.where(sym == "[")[0]:
         ends = np.where((sym == "]") & (np.arange(len(sym)) > k))[0]
         rhythm.append((float(t[k]), float(t[ends[0]]) if ends.size else dur, "VF"))
+    # Signal-quality marks '~' (MIT-BIH format): subtype != 0 = some channel noisy/unreadable,
+    # 0 = clean again. Beats are often not annotated in between, so these spans must not
+    # create reference pauses (findings.py) - LTDB has several.
+    start = None
+    sub = np.asarray(ann.subtype) if ann.subtype is not None else np.zeros(len(sym), int)
+    for k in np.where(sym == "~")[0]:
+        if sub[k] != 0 and start is None:
+            start = t[k]
+        elif sub[k] == 0 and start is not None:
+            rhythm.append((float(start), float(t[k]), "NOISE"))
+            start = None
+    if start is not None:
+        rhythm.append((float(start), dur, "NOISE"))
     has_rhythm = bool(marks) if spec["rhythm"] == "some" else bool(spec["rhythm"])
 
     beats_t = beats_c = None

@@ -333,23 +333,27 @@ def ref_events(r: dict) -> dict:
     }
 
 
+def _runs_idx(labels: np.ndarray, c: str, min_n: int = 3) -> list[tuple[int, int]]:
+    out, i, lab = [], 0, np.asarray(labels)
+    while i < len(lab):
+        if lab[i] == c:
+            j = i
+            while j + 1 < len(lab) and lab[j + 1] == c:
+                j += 1
+            if j - i + 1 >= min_n:
+                out.append((i, j))
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
 def beat_events(r: dict, labels: np.ndarray) -> dict:
     """Critical events from per-beat labels (shared detector)."""
     bt = r["b"].idx / FS
     lab = np.asarray(labels)
-    out = {"vt": [], "svt": []}
-    for key, c, min_s in (("vt", "V", 0.0), ("svt", "S", CRIT_S)):
-        i = 0
-        while i < len(lab):
-            if lab[i] == c:
-                j = i
-                while j + 1 < len(lab) and lab[j + 1] == c:
-                    j += 1
-                if j - i + 1 >= 3 and bt[j] - bt[i] >= min_s:
-                    out[key].append((bt[i], bt[j]))
-                i = j + 1
-            else:
-                i += 1
+    out = {"vt": [(bt[i], bt[j]) for i, j in _runs_idx(lab, "V")],
+           "svt": [(bt[i], bt[j]) for i, j in _runs_idx(lab, "S") if bt[j] - bt[i] >= CRIT_S]}
     good = lab != "Q"
     rr = np.diff(bt)
     out["pause"] = [(bt[i], bt[i + 1]) for i in np.where((rr > PAUSE_S) & good[:-1] & good[1:])[0]]
@@ -381,15 +385,22 @@ def system_events(r: dict, thr: dict) -> dict:
             "af": episodes(t, p[:, g["af_or_afl"]].max(1) >= thr["af"], 10.0, CRIT_S),
             "pause": episodes(t, p[:, g["pause_or_block"]].max(1) >= thr["pause"], 10.0),
         }
-        # Ensemble: heartKIT + rules beats (OR) for V runs and pauses from the shared
-        # detector, each V run confirmed by ECGFounder (pvc or VT/WCT group >= its
-        # DS1 confirm threshold in an overlapping window); AF and SVT from ECGFounder.
-        both = combine(r["b"].label, r["hk_label"], "or")
-        be = beat_events(r, both)
+        # Ensemble candidates for VT/NSVT (one is picked on DS1 in pick_ensemble);
+        # in all of them AF and sustained SVT come from ECGFounder and pauses from
+        # the shared detector.
+        runs = _runs_idx(r["b"].label, "V")
         conf = np.maximum(p[:, g["pvc"]].max(1), p[:, g["vt_or_wct"]].max(1))
-        keep = [e for e in be["vt"] if any(conf[(t <= e[1]) & (t + 10 >= e[0])] >= thr["confirm"])]
-        ev["ensemble"] = {"vt": keep, "svt": ev["ecgfounder"]["svt"], "af": ev["ecgfounder"]["af"],
-                          "pause": be["pause"]}
+        ecgf_ok = lambda e: bool((conf[(t <= e[1]) & (t + 10 >= e[0])] >= thr["confirm"]).any())  # noqa: E731
+        hk = np.asarray(r["hk_label"])
+        cand = {
+            "rules": ev["rules"]["vt"],
+            "rules AND heartkit": beat_events(r, combine(r["b"].label, hk, "and"))["vt"],
+            "rules, heartKIT-confirmed": [(bt[i], bt[j]) for i, j in runs if (hk[i:j + 1] == "V").any()],
+            "rules, ECGFounder-confirmed": [e for e in ev["rules"]["vt"] if ecgf_ok(e)],
+        }
+        for name, vt in cand.items():
+            ev[f"ensemble: VT {name}"] = {"vt": vt, "svt": ev["ecgfounder"]["svt"], "af": ev["ecgfounder"]["af"],
+                                         "pause": ev["rules"]["pause"]}
     return ev
 
 
@@ -412,6 +423,10 @@ def event_eval(rows: list[dict], thr: dict) -> dict:
                             "n_ref": len(ref[k]["ref"]), "n_found": int(sum(found)), "n_false": len(false),
                             "hours": r["dur_s"] / 3600})
     out = {}
+    best = pick_ensemble(per)
+    for p in per:
+        if p["system"] == best:
+            per.append({**p, "system": "ensemble"})
     for name in SETS + (HELD,):
         sub = [p for p in per if p["set"] == name or (name == HELD and p["set"] != "mitdb-DS1")]
         out[name] = {}
@@ -429,9 +444,22 @@ def event_eval(rows: list[dict], thr: dict) -> dict:
                     "episodes": sum(p["n_ref"] for p in q),
                     "episode_Se": (sum(p["n_found"] for p in q) / max(sum(p["n_ref"] for p in q), 1)),
                     "false": nf, "hours": hours,
+                    "false_per_day": nf / hours * 24 if hours else float("nan"),
                     "false_per_1000_pt_days": nf / hours * 24 * 1000 if hours else float("nan"),
                 }
+    out["chosen_ensemble"] = best
     return out
+
+
+def pick_ensemble(per: list[dict]) -> str:
+    """VT candidate with the highest DS1 per-patient Se, then the fewest DS1 false VT events."""
+    scores = {}
+    for name in {p["system"] for p in per if p["system"].startswith("ensemble: ")}:
+        q = [p for p in per if p["system"] == name and p["type"] == "vt" and p["set"] == "mitdb-DS1"]
+        pts = [p for p in q if p["n_ref"] > 0]
+        se = sum(p["n_found"] > 0 for p in pts) / max(len(pts), 1)
+        scores[name] = (-se, sum(p["n_false"] for p in q))
+    return min(scores, key=scores.get)
 
 
 # --------------------------------------------------------------------------
@@ -503,13 +531,20 @@ def report(beats: dict, wins: dict, events: dict, thr: dict) -> str:
                 cells.append("–" if m is None else f"{fmt(m['Se'], 2)} / {fmt(m['PPV'], 2)} ({fmt(m['AUROC'], 2)})")
             L.append(f"| {name} | {t} ({pos} pos) | " + " | ".join(cells) + " |")
     L += ["", "### Critical findings per record", "",
-          "| set | system | finding | patients with | per-patient Se | episodes | episode Se | false | false / 1,000 patient-days |",
-          "|---|---|---|---:|---:|---:|---:|---:|---:|"]
+          f"Ensemble picked on DS1: **{events['chosen_ensemble']}** (VT); AF and sustained SVT from "
+          "ECGFounder, pauses from the shared detector.", "",
+          "| set | system | finding | patients with | per-patient Se | episodes | episode Se | false | false / day | false / 1,000 patient-days |",
+          "|---|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for name, by in events.items():
+        if name == "chosen_ensemble":
+            continue
         for s, d in by.items():
             for k, m in d.items():
+                if s.startswith("ensemble: ") and k != "vt":
+                    continue
                 L.append(f"| {name} | {s} | {k} | {m['patients_with']} | {fmt(m['patient_Se'])} | {m['episodes']} | "
-                         f"{fmt(m['episode_Se'])} | {m['false']} | {fmt(m['false_per_1000_pt_days'], 0)} |")
+                         f"{fmt(m['episode_Se'])} | {m['false']} | {fmt(m['false_per_day'], 1)} | "
+                         f"{fmt(m['false_per_1000_pt_days'], 0)} |")
     L += ["", f"ECGFounder thresholds (DS1): {json.dumps({k: round(v, 3) for k, v in thr.items()})}", ""]
     return "\n".join(L)
 

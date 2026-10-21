@@ -167,8 +167,15 @@ def load_torch_model(ckpt: Path = DEFAULT_CKPT, allow_random: bool = False):
 
     model = build_net()
     if ckpt is not None and Path(ckpt).exists():
-        # weights_only=True: never unpickle arbitrary objects from a download.
-        sd = torch.load(ckpt, map_location="cpu", weights_only=True)
+        # weights_only=True: never unpickle arbitrary objects from a download. The
+        # checkpoint also stores its validation AUROC as a numpy scalar, so allow
+        # exactly the numpy scalar/dtype types and nothing else.
+        from numpy._core.multiarray import scalar
+
+        safe = [(scalar, "numpy.core.multiarray.scalar"), np.dtype,
+                *(type(np.dtype(t)) for t in ("float64", "float32", "int64"))]
+        with torch.serialization.safe_globals(safe):
+            sd = torch.load(ckpt, map_location="cpu", weights_only=True)
         sd = sd.get("state_dict", sd)
         sd = {k.removeprefix("module."): v for k, v in sd.items()}
         missing, unexpected = model.load_state_dict(sd, strict=False)

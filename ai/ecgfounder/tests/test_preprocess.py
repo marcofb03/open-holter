@@ -91,3 +91,19 @@ def test_window_truth():
     assert np.isnan(tr["af"][8])                               # 40-50 s: only 3 s AF -> ambiguous
     assert tr["sinus"][0] == 1 and tr["sinus"][10] == 0
     assert tr["brady"][1] == 0 and tr["tachy"][1] == 0          # 75 bpm
+
+
+def test_vf_windows_left_out_of_beat_targets():
+    fs = 100
+    beats = [(0.5 + 0.8 * k, "N") for k in range(25)]           # 0-20 s
+    beats += [(40.5 + 0.8 * k, "N") for k in range(20)]         # 40-56 s
+    ann = _ann(beats + [(22.0, "["), (35.0, "]")], [(0, "(N")], fs)
+    tr = ev.window_truth(ann, fs, 60 * fs, np.array([0.0, 20.0, 45.0]))
+    assert tr["pvc"][0] == 0 and np.isnan(tr["pvc"][1]) and tr["pvc"][2] == 0
+    assert np.isnan(tr["vrun"][1]) and np.isnan(tr["pause"][1])
+
+
+def test_subsets():
+    assert ev.subset("mitdb", "101") == "mitdb-DS1"
+    assert ev.subset("mitdb", "100") == "mitdb-DS2"
+    assert ev.subset("svdb", "800") == "svdb"

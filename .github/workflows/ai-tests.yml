@@ -1,0 +1,32 @@
+name: ai tests
+
+on:
+  push:
+    paths:
+      - "ai/**"
+      - ".github/workflows/ai-tests.yml"
+  pull_request:
+    paths:
+      - "ai/**"
+      - ".github/workflows/ai-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai/ecgfounder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The tests need neither torch nor the weights nor PhysioNet data:
+      # preprocessing parity, windowing, label groups and ground-truth rules.
+      - name: Install
+        run: pip install numpy scipy pytest
+      - name: Test
+        run: python -m pytest -q tests

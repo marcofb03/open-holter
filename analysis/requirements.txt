@@ -1,6 +1,4 @@
 numpy
 scipy
-pandas
 matplotlib
-neurokit2
-wfdb
+wfdb        # only for tools/ (reading PhysioNet databases)

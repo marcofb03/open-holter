@@ -17,6 +17,7 @@ from .events import Event  # noqa: E402
 
 COLORS = {"N": "#2b6cb0", "S": "#dd6b20", "V": "#c53030", "Q": "#a0aec0"}
 MAX_STRIPS = 40
+FILTER_NOTE = "0.5–40 Hz band-pass"
 
 
 def _clock(t0_epoch: float | None, t_rel: float) -> str:
@@ -25,15 +26,26 @@ def _clock(t0_epoch: float | None, t_rel: float) -> str:
     return dt.datetime.fromtimestamp(t0_epoch + t_rel).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _strip(path: Path, clean: np.ndarray, fs: float, b: Beats, a_s: float, z_s: float,
-           title: str, mark: float | None = None) -> None:
-    a, z = max(int(a_s * fs), 0), min(int(z_s * fs), len(clean))
+def _strip(path: Path, raw: np.ndarray, clean: np.ndarray, fs: float, b: Beats, a_s: float,
+           z_s: float, title: str, mark: float | None = None) -> None:
+    """ECG strip: the raw signal as recorded, with the detection filter as a light overlay.
+
+    The raw trace is drawn unchanged (only the ECGLogger mV values). The filtered
+    trace is shifted to the raw trace's median in this strip so the two overlap;
+    that shift is for display only.
+    """
+    a, z = max(int(a_s * fs), 0), min(int(z_s * fs), len(raw))
+    if z <= a:
+        return
     t = np.arange(a, z) / fs
     fig, ax = plt.subplots(figsize=(14, 2.6), dpi=110)
-    ax.plot(t, clean[a:z], color="#1a202c", lw=0.8)
+    offset = float(np.median(raw[a:z]))
+    ax.plot(t, clean[a:z] + offset, color="#90cdf4", lw=1.6, alpha=0.8,
+            label=f"filtered {FILTER_NOTE} (detection)")
+    ax.plot(t, raw[a:z], color="#1a202c", lw=0.8, label="raw, as recorded")
     sel = (b.idx >= a) & (b.idx < z)
     for p, l in zip(b.idx[sel], b.label[sel]):
-        ax.annotate(l, (p / fs, clean[p]), textcoords="offset points", xytext=(0, 6),
+        ax.annotate(l, (p / fs, raw[p]), textcoords="offset points", xytext=(0, 6),
                     ha="center", fontsize=8, color=COLORS[l], weight="bold")
     if mark is not None:
         ax.axvline(mark, color="#805ad5", ls="--", lw=1)
@@ -43,6 +55,7 @@ def _strip(path: Path, clean: np.ndarray, fs: float, b: Beats, a_s: float, z_s: 
     ax.set_title(title, fontsize=9, loc="left")
     ax.set_xlabel("seconds from start")
     ax.set_ylabel("mV")
+    ax.legend(loc="upper right", fontsize=7, framealpha=0.8)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -70,7 +83,7 @@ def _overview(path: Path, b: Beats, fs: float) -> None:
     plt.close(fig)
 
 
-def write_report(out_dir: str | Path, clean: np.ndarray, fs: float, b: Beats,
+def write_report(out_dir: str | Path, raw: np.ndarray, clean: np.ndarray, fs: float, b: Beats,
                  events: list[Event], summ: dict, t0_epoch: float | None,
                  title: str = "ECG analysis") -> Path:
     out = Path(out_dir)
@@ -86,15 +99,18 @@ def write_report(out_dir: str | Path, clean: np.ndarray, fs: float, b: Beats,
             half = max(5.0, (e.t_end - e.t_start) / 2 + 2)
             a_s, z_s, mark = mid - half, mid + half, None
         png = f"strips/event_{k:03d}.png"
-        _strip(out / png, clean, fs, b, a_s, z_s,
-               f"{e.kind} at {_clock(t0_epoch, e.t_start)}", mark)
+        _strip(out / png, raw, clean, fs, b, a_s, z_s,
+               f"{e.kind} at {_clock(t0_epoch, e.t_start)} – confidence {e.confidence_level}", mark)
         rows.append(
             f"<tr><td>{k + 1}</td><td>{html.escape(e.kind)}</td>"
             f"<td>{_clock(t0_epoch, e.t_start)}</td><td>{e.n_beats or ''}</td>"
             f"<td>{'' if np.isnan(e.rate_bpm) else f'{e.rate_bpm:.0f}'}</td>"
-            f"<td>{html.escape(e.note)}</td><td><a href='#ev{k}'>strip</a></td></tr>")
+            f"<td>{html.escape(e.note)}</td>"
+            f"<td>{e.confidence_level}{': ' + html.escape(e.confidence_note) if e.confidence_note else ''}</td>"
+            f"<td><a href='#ev{k}'>strip</a></td></tr>")
     strips = "\n".join(
-        f"<h3 id='ev{k}'>{k + 1}. {html.escape(e.kind)} – {_clock(t0_epoch, e.t_start)}</h3>"
+        f"<h3 id='ev{k}'>{k + 1}. {html.escape(e.kind)} – {_clock(t0_epoch, e.t_start)}"
+        f" (confidence {e.confidence_level})</h3>"
         f"<img src='strips/event_{k:03d}.png' width='100%'>"
         for k, e in enumerate(events[:MAX_STRIPS]))
 
@@ -113,6 +129,11 @@ th{{background:#f7fafc}} .warn{{background:#fffaf0;border:1px solid #f6ad55;padd
 <b style="color:{COLORS['S']}">S</b> early beat with normal shape (atrial-like),
 <b style="color:{COLORS['V']}">V</b> beat with different shape (ventricular-like),
 <b style="color:{COLORS['Q']}">Q</b> unreadable. A cardiologist must review the strips.</p>
+<p>Strips show the <b>raw signal as recorded</b> (black, ECGLogger mV values, unchanged).
+Beats are detected on a copy filtered with a {FILTER_NOTE} (zero-phase Butterworth),
+drawn as a light blue overlay. The recording files are never modified.
+Confidence (high / medium / low) is lowered by noise, unreadable beats, the artefact check,
+lost skin contact, strong movement, or H10 RR intervals that disagree with ours.</p>
 <h2>Summary</h2>
 <table>
 <tr><th>Recording</th><td>{s['duration_h']:.2f} h, {s['beats']} beats, {s['unreadable_beats_pct']:.1f}% unreadable</td></tr>
@@ -123,8 +144,8 @@ th{{background:#f7fafc}} .warn{{background:#fffaf0;border:1px solid #f6ad55;padd
 </table>
 <h2>Overview</h2><img src="overview.png" width="100%">
 <h2>Events (most important first)</h2>
-<table><tr><th>#</th><th>Type</th><th>Time</th><th>Beats</th><th>Rate</th><th>Note</th><th></th></tr>
-{''.join(rows) or '<tr><td colspan=7>No events found.</td></tr>'}
+<table><tr><th>#</th><th>Type</th><th>Time</th><th>Beats</th><th>Rate</th><th>Note</th><th>Confidence</th><th></th></tr>
+{''.join(rows) or '<tr><td colspan=8>No events found.</td></tr>'}
 </table>
 <h2>ECG strips</h2>
 {strips}

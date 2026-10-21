@@ -50,7 +50,8 @@ single-lead ECG at 130 Hz; with a dedicated phone it can record for weeks.
 | `analysis/ecgpipe/` | Python analysis: loading, beat detection and labels, events, confidence, HTML report. |
 | `analysis/tests/`, `analysis/tools/` | Synthetic tests (run in CI) and validation on PhysioNet databases. |
 | `analysis/VALIDATION.md` | Accuracy on held-out data, including where it is weak. |
-| `.github/workflows/` | Automatic checks: analysis tests and Android build. |
+| `ai/` | Open AI second readers (ECGFounder, heartKIT) and the cross-system benchmark; results in `ai/benchmark/RESULTS.md`. |
+| `.github/workflows/` | Automatic checks: analysis tests, AI tests and Android build. |
 | `data/`, `reports/` | Local only, never committed: your recordings, downloaded datasets, generated reports. |
 
 The file formats shared by app and analysis are the contract between the two
@@ -62,7 +63,7 @@ parts; they are documented in [android/README.md](android/README.md#files-and-fo
 |---|---|
 | `analysis/` – Python analysis of ECGLogger CSV files | rule-based v2, validated on held-out MIT-BIH DS2, SVDB and INCART, see [analysis/VALIDATION.md](analysis/VALIDATION.md) |
 | `android/` – recorder app (Kotlin + Polar BLE SDK) | first version, APK built by CI; not yet tested on a real phone, see [android/README.md](android/README.md) |
-| AI second reader (open ECGFounder 1-lead, heartKIT) | benchmark in progress, accuracy not measured yet |
+| AI second readers – `ai/` (open ECGFounder 1-lead, Ambiq heartKIT) | evaluated on held-out MIT-BIH DS2, SVDB and INCART at 130 Hz; recommended combination: rules + heartKIT beat/AF models, ECGFounder on flagged windows; see [ai/benchmark/RESULTS.md](ai/benchmark/RESULTS.md) |
 | AI beat classifier (trained on Icentia11k) | planned, see [analysis/README.md](analysis/README.md#next-ai-classifier) |
 
 ## Analysis quick start

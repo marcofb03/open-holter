@@ -1,0 +1,11 @@
+# CPU is enough. For a smaller install use the CPU wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
+numpy
+scipy
+pandas
+wfdb
+scikit-learn
+onnx
+onnxruntime
+pytest

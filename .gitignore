@@ -30,3 +30,10 @@ android/local.properties
 *.aab
 *.keystore
 *.jks
+
+# AI model weights and exports (re-download with ai/ecgfounder/download_weights.py)
+ai/**/weights/
+*.pth
+*.pt
+*.onnx
+*.tflite

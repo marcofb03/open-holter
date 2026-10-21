@@ -1,0 +1,4 @@
+numpy
+scipy
+ai-edge-litert   # TFLite runtime (or tensorflow)
+pytest

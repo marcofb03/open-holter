@@ -107,3 +107,12 @@ def test_subsets():
     assert ev.subset("mitdb", "101") == "mitdb-DS1"
     assert ev.subset("mitdb", "100") == "mitdb-DS2"
     assert ev.subset("svdb", "800") == "svdb"
+
+
+def test_fast_median_equals_scipy():
+    from scipy.ndimage import median_filter
+
+    x = np.random.default_rng(1).standard_normal((4, 3000))
+    for k in (5, 201):
+        ref = median_filter(x, size=(1, k), mode="constant", cval=0.0)
+        assert np.allclose(infer._median_zero_pad(x, k), ref)

@@ -108,9 +108,24 @@ def filter_bandpass(signal: np.ndarray, fs: float) -> np.ndarray:
     k = int(0.4 * fs) + 1
     if k % 2 == 0:
         k += 1
-    size = (1,) * (x.ndim - 1) + (k,)
-    baseline = median_filter(x, size=size, mode="constant", cval=0.0)
-    return x - baseline
+    return x - _median_zero_pad(x, k)
+
+
+def _median_zero_pad(x: np.ndarray, k: int) -> np.ndarray:
+    """Running median of odd width k along the last axis, zero-padded at both ends.
+
+    bottleneck's move_median (O(n log k)) on an explicitly zero-padded copy gives
+    exactly scipy's median_filter(mode="constant", cval=0), about 10x faster;
+    scipy is the fallback when bottleneck is not installed.
+    """
+    try:
+        import bottleneck as bn
+    except ImportError:
+        size = (1,) * (x.ndim - 1) + (k,)
+        return median_filter(x, size=size, mode="constant", cval=0.0)
+    h = k // 2
+    xp = np.pad(x, [(0, 0)] * (x.ndim - 1) + [(h, h)])
+    return bn.move_median(xp, k, axis=-1)[..., k - 1:]
 
 
 def z_score(x: np.ndarray) -> np.ndarray:
@@ -198,9 +213,10 @@ class Predictor:
 
     def __init__(self, backend: str = "torch", ckpt: Path | None = DEFAULT_CKPT,
                  onnx_path: Path | None = None, threads: int | None = None,
-                 batch: int = 32, allow_random: bool = False):
+                 batch: int = 32, allow_random: bool = False, bf16: bool = False):
         self.backend = backend
         self.batch = batch
+        self.bf16 = bf16  # torch only: bfloat16 autocast (about 2x faster on AMX / AVX-512 BF16 CPUs)
         if backend == "torch":
             import torch
 
@@ -225,8 +241,8 @@ class Predictor:
             if self.backend == "torch":
                 import torch
 
-                with torch.inference_mode():
-                    out.append(self.model(torch.from_numpy(xb)).numpy())
+                with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16, enabled=self.bf16):
+                    out.append(self.model(torch.from_numpy(xb)).float().numpy())
             else:
                 out.append(self.sess.run(None, {self.inp: xb})[0])
         return np.concatenate(out) if out else np.zeros((0, len(TASKS)), np.float32)

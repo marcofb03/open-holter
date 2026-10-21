@@ -33,7 +33,7 @@ Polar H10 ──Bluetooth──► Android app (records 24/7, marker button)
 | Part | State |
 |---|---|
 | `analysis/` – Python analysis of ECGLogger CSV files | first version, tested on 3 MIT-BIH records |
-| `android/` – recorder app (Kotlin + Polar BLE SDK) | planned |
+| `android/` – recorder app (Kotlin + Polar BLE SDK) | first version, see [android/README.md](android/README.md) |
 | AI beat classifier (trained on open data) | planned |
 
 ## Analysis quick start

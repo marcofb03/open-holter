@@ -93,7 +93,7 @@ fun FilesScreen() {
         }
         exportState?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(days, key = { it.day.toString() }) { d ->
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

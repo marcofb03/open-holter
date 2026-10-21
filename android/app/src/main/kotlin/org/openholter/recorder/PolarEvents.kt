@@ -1,9 +1,11 @@
 package org.openholter.recorder
 
+import com.polar.androidcommunications.api.ble.model.DisInfo
 import com.polar.sdk.api.PolarBleApi
 import com.polar.sdk.api.PolarBleApiCallback
 import com.polar.sdk.api.PolarBleDisconnectInfo
 import com.polar.sdk.api.model.PolarDeviceInfo
+import com.polar.sdk.api.model.PolarHealthThermometerData
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -57,5 +59,10 @@ object PolarEvents {
         override fun batteryLevelReceived(identifier: String, level: Int) {
             _events.tryEmit(E.Battery(identifier, level))
         }
+
+        // Abstract in the SDK's callback base class; not used here.
+        override fun disInformationReceived(identifier: String, disInfo: DisInfo) = Unit
+
+        override fun htsNotificationReceived(identifier: String, data: PolarHealthThermometerData) = Unit
     }
 }

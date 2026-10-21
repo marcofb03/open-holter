@@ -85,8 +85,8 @@ fun StatusScreen(
 
     val deviceId = status.deviceId ?: prefs.deviceId
     val todaySeconds = if (status.serviceRunning) status.todayRecordedSeconds else prefs.ecgSamples(LocalDate.now()) / 130
-    val used = if (status.serviceRunning) status.storageUsedBytes else storage?.usedBytes ?: 0
-    val free = if (status.serviceRunning) status.storageFreeBytes else storage?.freeBytes ?: 0
+    val used = if (status.serviceRunning) status.storageUsedBytes else storage?.usedBytes ?: 0L
+    val free = if (status.serviceRunning) status.storageFreeBytes else storage?.freeBytes ?: 0L
     val lastMarker = status.lastMarkerMs ?: prefs.lastMarkerMs.takeIf { it > 0 }
     val recording = status.serviceRunning && status.link != Link.IDLE
 

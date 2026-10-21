@@ -1,0 +1,32 @@
+# --- Personal health data: never commit ---
+data/recordings/
+reports/
+*.csv
+*.edf
+*.parquet
+
+# Downloaded public datasets (re-download with the tools)
+data/mitdb/
+data/svdb/
+data/incartdb/
+data/icentia11k/
+data/work/
+
+# Python
+.venv/
+.cache/
+__pycache__/
+*.pyc
+
+# macOS / exFAT metadata
+._*
+.DS_Store
+
+# Android / Gradle
+android/**/build/
+android/.gradle/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks

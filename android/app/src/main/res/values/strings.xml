@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">open-holter</string>
+    <string name="not_medical">Not a medical device. For personal research only. It does not diagnose anything and may miss events. If you feel unwell, seek medical help.</string>
+</resources>

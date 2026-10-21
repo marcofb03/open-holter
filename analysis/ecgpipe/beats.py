@@ -7,9 +7,9 @@ Labels (AAMI-style):
     Q  unclassifiable (noisy segment)
 
 This is a transparent rule-based first version. It is meant to flag
-candidates for a cardiologist to read, not to diagnose. All thresholds were
-chosen on MIT-BIH DS1 only (see VALIDATION.md); the other databases are
-held out.
+candidates for a cardiologist to read, not to diagnose. Thresholds were
+chosen on MIT-BIH DS1 (see VALIDATION.md for how, and for the one design
+change prompted by a held-out result).
 
 Everything here is plain numpy / scipy so it can be ported to the phone.
 """
@@ -26,6 +26,7 @@ QRS_HALF_S = 0.10              # QRS region used for shape comparison
 SHAPE_LP_HZ = 20.0             # shape comparison bandwidth
 MAX_LAG_S = 0.05               # allowed shift when aligning a beat to the template
 TEMPLATE_BLOCK = 300           # beats per template (follows posture / electrode changes)
+REFRACTORY_S = 0.25            # min. spacing of two beats (240 bpm); wide PVCs are not counted twice
 
 
 @dataclass
@@ -94,7 +95,7 @@ def _rolling_levels(env: np.ndarray, peaks: np.ndarray, fs: float,
 def detect_r_peaks(clean: np.ndarray, fs: float, k: float = 0.3) -> np.ndarray:
     """QRS detection on the slope envelope with an adaptive threshold and search-back.
 
-    1. Envelope peaks at least 0.22 s apart above floor + k * (beat level - floor);
+    1. Envelope peaks at least REFRACTORY_S apart above floor + k * (beat level - floor);
        of two peaks < 0.3 s apart the much weaker one is dropped (T wave).
     2. Search-back: inside a gap > 1.5x the local RR, accept the largest peak above
        half that threshold (finds low-amplitude or wide beats).
@@ -103,7 +104,7 @@ def detect_r_peaks(clean: np.ndarray, fs: float, k: float = 0.3) -> np.ndarray:
     if len(clean) < fs:
         return np.zeros(0, dtype=int)
     env = qrs_envelope(clean, fs)
-    refr = int(0.22 * fs)
+    refr = int(REFRACTORY_S * fs)
     peaks, _ = signal.find_peaks(env, distance=refr)
     level, floor = _rolling_levels(env, peaks, fs)
     thr = floor + k * (level - floor)
@@ -136,7 +137,7 @@ def detect_r_peaks(clean: np.ndarray, fs: float, k: float = 0.3) -> np.ndarray:
     snapped = np.unique(snapped)
     keep = [snapped[0]] if snapped.size else []
     for p in snapped[1:]:
-        if p - keep[-1] >= int(0.2 * fs):
+        if p - keep[-1] >= refr:
             keep.append(p)
         elif abs(clean[p]) > abs(clean[keep[-1]]):
             keep[-1] = p
@@ -303,10 +304,11 @@ def shape_features(clean: np.ndarray, idx: np.ndarray, fs: float, usable: np.nda
 
     The main template is the dominant QRS shape. If a group of at least 8 beats
     has another shape but arrives on time, with RR before and after within 10%
-    of the main rhythm's RR, that shape is accepted as a second normal template (posture
-    change, intermittent bundle-branch block, electrode shift). A different
-    shape at a faster rate is never accepted, so runs of fast wide beats stay V,
-    and only beats that are themselves on time may use the extra template.
+    of the main rhythm's RR, that shape is accepted as a second normal template
+    (posture change, intermittent bundle-branch block, electrode shift). A
+    different shape at a faster rate is never accepted, so runs of fast wide
+    beats stay V, and only beats that are themselves on time may use the extra
+    template.
 
     Returns corr_qrs, corr_wide, width_ratio, amp_ratio, aligned R index.
     """
@@ -479,16 +481,18 @@ def label_beats(rr_prev: np.ndarray, rr_next: np.ndarray, rr_ref: np.ndarray,
 
 # --------------------------------------------------------------------------- artefacts
 
-def _stretches(label: np.ndarray, min_len: int = 3) -> list[tuple[int, int]]:
-    """Index ranges (first, last) of >= min_len consecutive V/S beats."""
-    out, start = [], None
-    for i, lab in enumerate(list(label) + ["N"]):
-        if lab in ("V", "S"):
-            start = i if start is None else start
-        elif start is not None:
-            if i - start >= min_len:
-                out.append((start, i - 1))
-            start = None
+def _stretches(label: np.ndarray, min_count: int = 3) -> list[tuple[int, int]]:
+    """Index ranges (first, last) holding >= min_count V/S beats, with at most one
+    other beat between two of them (a run, or V/S alternating with normal beats)."""
+    ectopic = [i for i, lab in enumerate(label) if lab in ("V", "S")]
+    out, group = [], []
+    for i in ectopic + [None]:
+        if i is not None and group and i - group[-1] <= 2:
+            group.append(i)
+            continue
+        if len(group) >= min_count:
+            out.append((group[0], group[-1]))
+        group = [i] if i is not None else []
     return out
 
 
@@ -496,7 +500,8 @@ def marching_through(clean: np.ndarray, fs: float, idx: np.ndarray, label: np.nd
                      corr_qrs: np.ndarray, min_corr: float = 0.85) -> list[tuple[int, int, np.ndarray]]:
     """Find V/S stretches that are artefacts on top of an undisturbed sinus rhythm.
 
-    For every stretch of >= 3 consecutive V/S beats, the sinus rhythm before it
+    For every stretch with >= 3 V/S beats (a run, or V/S alternating with
+    normal beats, see _stretches), the sinus rhythm before it
     is extended through the stretch (one expected beat per sinus RR, re-anchored
     on every beat found). At each expected time the filtered signal is searched
     (±60 ms) for a QRS that matches the shape of the preceding normal beats. If

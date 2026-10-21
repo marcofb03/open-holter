@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest
+# Only needed to re-run the baseline (commit 8b7eafd) for the before/after
+# comparison in VALIDATION.md; the current pipeline does not use it.
+# neurokit2

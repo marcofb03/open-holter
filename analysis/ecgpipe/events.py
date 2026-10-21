@@ -19,6 +19,7 @@ SEVERITY = {
     "Sudden rate jump": 2,
     "V couplet": 3,
     "S couplet": 2,
+    "Possible artefact": 1,
 }
 
 
@@ -30,10 +31,16 @@ class Event:
     n_beats: int = 0
     rate_bpm: float = float("nan")
     note: str = ""
+    confidence: float = 1.0      # 0–1, see context.rate_event
+    confidence_note: str = ""    # why the confidence was lowered
 
     @property
     def severity(self) -> int:
         return SEVERITY.get(self.kind, 1)
+
+    @property
+    def confidence_level(self) -> str:
+        return "high" if self.confidence >= 0.7 else "medium" if self.confidence >= 0.4 else "low"
 
 
 def _runs(labels: np.ndarray, target: str) -> list[tuple[int, int]]:
@@ -90,6 +97,12 @@ def find_events(b: Beats, fs: float, markers_rel: list[float] | None = None) -> 
                         ev.append(Event("Sudden rate jump", t[j], t[i],
                                         rate_bpm=float(smooth[i]),
                                         note=f"{smooth[j]:.0f} -> {smooth[i]:.0f} bpm"))
+
+    # Stretches that looked like a run but were removed by the artefact check:
+    # listed (low priority) so the reviewer can confirm nothing real was hidden.
+    for a, z in _runs(np.where(b.artifact, "A", "-"), "A"):
+        ev.append(Event("Possible artefact", t[a], t[z], z - a + 1,
+                        note="looked like a run, but sinus beats continue through it"))
 
     for m in markers_rel or []:
         ev.append(Event("Marker", m, m, note="pressed by you"))

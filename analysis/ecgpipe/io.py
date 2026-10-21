@@ -1,10 +1,15 @@
-"""Loading ECG recordings.
+"""Loading ECG recordings and optional side files.
 
 ECGLogger (iOS, Polar H10) CSV format, per ecglogger.com:
     timestamp_ns, ecg_mV, pulse_bpm, rr_ms, marker
 Pulse / RR / marker are only written when there is new data, so most rows
 carry only timestamp + ECG. Whether a header line exists is not documented,
 so it is detected.
+
+Optional side files written by the open-holter Android app:
+    accelerometer:  timestamp_ns, x_mG, y_mG, z_mG               (25–50 Hz)
+    HR / contact:   timestamp_ns, hr_bpm, rr_ms, contact, contact_supported
+The loaders only read files; nothing is ever written back to a recording.
 """
 
 from __future__ import annotations
@@ -138,3 +143,77 @@ def write_ecglogger_csv(path: str | Path, t: np.ndarray, ecg_mv: np.ndarray,
         w = csv.writer(f)
         for i, (ti, v) in enumerate(zip(t, ecg_mv)):
             w.writerow([int(round(ti * 1e9)), f"{v:.4f}", "", "", "1" if i in marker_idx else ""])
+
+
+@dataclass
+class Accel:
+    t: np.ndarray            # epoch seconds
+    xyz: np.ndarray          # (n, 3) milli-g
+
+
+@dataclass
+class HeartRate:
+    t: np.ndarray            # epoch seconds, one per notification
+    hr: np.ndarray           # bpm (nan if missing)
+    contact: np.ndarray      # bool: skin contact reported
+    contact_supported: np.ndarray  # bool: the sensor reports contact at all
+    rr: list[tuple[float, float]] = field(default_factory=list)  # (t, rr_ms), H10's own RR
+
+
+def _rows(path: str | Path):
+    """Numeric CSV rows (header lines and empty lines skipped)."""
+    path = Path(path)
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        for row in csv.reader(f, delimiter=_sniff_delimiter(sample)):
+            if row and _to_float(row[0]) is not None:
+                yield row
+
+
+def _to_bool(x: str) -> bool | None:
+    x = x.strip().lower()
+    if x in ("1", "true", "yes", "y"):
+        return True
+    if x in ("0", "false", "no", "n"):
+        return False
+    return None
+
+
+def load_accel_csv(path: str | Path) -> Accel:
+    t, xyz = [], []
+    for row in _rows(path):
+        v = [_to_float(c) for c in row[1:4]] if len(row) >= 4 else [None]
+        if None in v:
+            continue
+        t.append(_to_float(row[0]) / 1e9)
+        xyz.append(v)
+    if not t:
+        raise ValueError(f"No accelerometer samples found in {path}")
+    order = np.argsort(t, kind="stable")
+    return Accel(np.asarray(t)[order], np.asarray(xyz, dtype=float)[order])
+
+
+def load_hr_csv(path: str | Path) -> HeartRate:
+    """HR / contact file. rr_ms may hold several values ('812 798' or '812|798')."""
+    t, hr, contact, supported, rr = [], [], [], [], []
+    for row in _rows(path):
+        ts = _to_float(row[0]) / 1e9
+        h = _to_float(row[1]) if len(row) > 1 else None
+        c = _to_bool(row[3]) if len(row) > 3 else None
+        cs = _to_bool(row[4]) if len(row) > 4 else None
+        t.append(ts)
+        hr.append(np.nan if h is None else h)
+        contact.append(True if c is None else c)
+        supported.append(bool(cs) if cs is not None else c is not None)
+        if len(row) > 2:
+            for part in row[2].replace("|", " ").replace(";", " ").split():
+                v = _to_float(part)
+                if v is not None and v > 0:
+                    rr.append((ts, v))
+    if not t:
+        raise ValueError(f"No heart-rate rows found in {path}")
+    order = np.argsort(t, kind="stable")
+    return HeartRate(np.asarray(t)[order], np.asarray(hr, dtype=float)[order],
+                     np.asarray(contact, dtype=bool)[order],
+                     np.asarray(supported, dtype=bool)[order], sorted(rr))

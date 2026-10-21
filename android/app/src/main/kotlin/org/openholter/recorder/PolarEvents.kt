@@ -38,12 +38,7 @@ object PolarEvents {
             _events.tryEmit(E.Connected(polarDeviceInfo.deviceId))
         }
 
-        @Deprecated("Use deviceDisconnected(polarDeviceInfo, info)")
-        override fun deviceDisconnected(polarDeviceInfo: PolarDeviceInfo) {
-            // Both overloads may be called; duplicates are harmless for the state machine.
-            _events.tryEmit(E.Disconnected(polarDeviceInfo.deviceId, ""))
-        }
-
+        // The SDK calls this and the deprecated single-argument overload; only this one is used.
         override fun deviceDisconnected(polarDeviceInfo: PolarDeviceInfo, info: PolarBleDisconnectInfo) {
             _events.tryEmit(E.Disconnected(polarDeviceInfo.deviceId, info.reason.name))
         }

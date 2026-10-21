@@ -34,7 +34,7 @@ Polar H10 ──Bluetooth──► Android app (records 24/7, marker button)
 |---|---|
 | `analysis/` – Python analysis of ECGLogger CSV files | rule-based v2, validated on held-out MIT-BIH DS2, SVDB and INCART, see [analysis/VALIDATION.md](analysis/VALIDATION.md) |
 | `android/` – recorder app (Kotlin + Polar BLE SDK) | first version, APK built by CI; not yet tested on a real phone, see [android/README.md](android/README.md) |
-| AI second reader (open ECGFounder 1-lead model) – `ai/ecgfounder/` | wrapper, evaluation and ONNX export built; accuracy run pending, see [ai/ecgfounder/RESULTS.md](ai/ecgfounder/RESULTS.md) |
+| AI second readers – `ai/` (open ECGFounder 1-lead, Ambiq heartKIT) | evaluated on held-out MIT-BIH DS2, SVDB and INCART at 130 Hz; recommended combination: rules + heartKIT beat/AF models, ECGFounder on flagged windows; see [ai/benchmark/RESULTS.md](ai/benchmark/RESULTS.md) |
 | AI beat classifier (trained on Icentia11k) | planned, see [analysis/README.md](analysis/README.md#next-ai-classifier) |
 
 ## Analysis quick start

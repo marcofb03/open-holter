@@ -447,6 +447,22 @@ def event_eval(rows: list[dict], thr: dict) -> dict:
                     "false_per_day": nf / hours * 24 if hours else float("nan"),
                     "false_per_1000_pt_days": nf / hours * 24 * 1000 if hours else float("nan"),
                 }
+            # All critical findings together: per-patient Se over (patient, finding type)
+            # pairs; false findings of all types over the recording time (counted once).
+            q = [p for p in sub if p["system"] == sysname]
+            if q:
+                pairs = [p for p in q if p["n_ref"] > 0]
+                hours = sum(p["hours"] for p in q if p["type"] == "vt")
+                nf = sum(p["n_false"] for p in q)
+                out[name][sysname]["all"] = {
+                    "patients_with": len({p["record"] for p in pairs}),
+                    "patient_Se": (sum(p["n_found"] > 0 for p in pairs) / len(pairs)) if pairs else float("nan"),
+                    "episodes": sum(p["n_ref"] for p in q),
+                    "episode_Se": sum(p["n_found"] for p in q) / max(sum(p["n_ref"] for p in q), 1),
+                    "false": nf, "hours": hours,
+                    "false_per_day": nf / hours * 24 if hours else float("nan"),
+                    "false_per_1000_pt_days": nf / hours * 24 * 1000 if hours else float("nan"),
+                }
     out["chosen_ensemble"] = best
     return out
 

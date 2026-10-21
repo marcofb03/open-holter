@@ -1,182 +1,189 @@
 # ECGFounder (1 lead) on H10-like signals – results
 
-> **Status (2026-10-21): accuracy NOT yet measured.** The machine this was
-> built on could not reach `huggingface.co` (weights) or `physionet.org`
-> (MIT-BIH, SVDB, INCART): its network policy blocks both. Everything that
-> doesn't need them is done and checked: the wrapper, the preprocessing
-> parity test, the ground-truth logic, the ONNX export, int8 quantisation and
-> CPU latency (which does not depend on weight values). The accuracy
-> tables below are empty on purpose. They get filled by running the four
-> commands in [Reproduce](#reproduce) on any machine with normal internet
-> (about 30 min on a 4-core laptop). No number on this page is estimated or
-> made up, except where it says **estimate**.
+> **Not a medical device.** These are research numbers on public databases.
 
-## What was built
+The head-to-head comparison is in [`../benchmark/RESULTS.md`](../benchmark/RESULTS.md):
+the rule pipeline vs ECGFounder vs heartKIT vs ensembles, plus the comparison
+with DeepRhythmAI's published figures. This page covers ECGFounder alone.
 
-| piece | state |
-|---|---|
-| `infer.py`: any single lead, any fs → 500 Hz → 10 s windows, 5 s step → ECGFounder preprocessing → 150 probabilities + 19 label groups | done, smoke-tested (random weights) on WFDB, `.npy` and ECGLogger CSV input |
-| Preprocessing identical to ECGFounder `dataset.py` / `util.filter_bandpass` (50 Hz notch, 0.67–40 Hz Butterworth-4 filtfilt, 0.4 s median baseline, z-score per window) | **verified**: max abs diff < 1e-5 vs. a verbatim copy of the original (`tests/`) |
-| `eval.py`: 130 Hz H10 simulation, window ground truth from beat + rhythm annotations, AUROC (record-bootstrap CI), AUPRC, Se/PPV/Sp at a threshold fixed on MIT-BIH | done; ground-truth rules unit-tested; full run end-to-end on a synthetic WFDB record |
-| `export_onnx.py`: ONNX fp32, int8 dynamic, int8 static (QDQ), parity, latency | done, measured (random weights) |
-| Accuracy on MIT-BIH / SVDB / INCART | **pending**: needs weights + data |
+**In short.**
+- ECGFounder is excellent at **AF/flutter** on H10-like signals. Held-out
+  window AUROC is 0.99; at the DS1 threshold Se is 0.83 and PPV 0.97, and
+  every held-out AF patient was found.
+- It is good at ranking windows with **PVCs (AUROC 0.97)** and
+  **PACs (0.92)**.
+- It is weak at **V runs** (AUROC 0.89, but PPV 0.08 at a usable
+  sensitivity) and cannot count beats.
+- Static int8 ONNX keeps most of the accuracy at a quarter of the size and
+  2.5× the speed.
 
-## Window ground truth (from `eval.py`)
+## Setup
 
-| target | positive window | scored with group (max of labels) |
-|---|---|---|
-| pvc | ≥ 1 V/E beat (not within 0.3 s of the edge) | PVC, "with premature ventricular or aberrantly conducted complexes", PVC + fusion, bigeminy |
-| sve | ≥ 1 A/a/J/S beat | premature atrial / supraventricular complexes |
-| vrun | ≥ 3 consecutive V beats inside | ventricular tachycardia, wide QRS tachycardia |
-| svt | ≥ 3 consecutive S beats inside, or ≥ 2 s of `(SVTA` | SVT, multifocal atrial tachycardia |
-| af | ≥ 50 % of window in `(AFIB`/`(AFL` (0 % = negative) | atrial fibrillation, atrial flutter |
-| sinus | window fully in `(N`/`(SBR`/`(B`/`(T` (negative: ≥ 50 % AF/AFL/SVT/VT/nodal/IVR) | sinus rhythm, normal sinus rhythm |
-| brady / tachy | plain sinus window, all beats normal, rate < 60 / > 100 bpm | sinus bradycardia (+ marked) / sinus tachycardia |
-| pause | RR > 2.0 s inside the window | sinus pause, SA block, 2nd/3rd-degree AV block, 2:1 |
+- Checkpoint `1_lead_ECGFounder.pth` from Hugging Face (MIT), SHA-256
+  `f863a38897fb49a27fec7e44008ea3c7bdbd29c77fa4a02ecbb8c56df4f37603`.
+  It is 370 MB: 30.8 M parameters plus optimiser state, stored `val_auroc`
+  0.881.
+- Signal path:
+  - record → 130 Hz (H10 rate) → 500 Hz;
+  - 10 s windows with a 5 s step, 70,767 windows from 197 records;
+  - ECGFounder's own filtering and z-score (verified identical to upstream);
+  - sigmoid.
+- Leads:
+  - MIT-BIH MLII, SVDB ECG1, INCART lead I (the model's training lead);
+  - INCART was also run on lead II, see below.
+- Ground truth per window comes from the cardiologists' beat and rhythm
+  annotations; definitions are in `eval.py`. Edge beats, partial runs,
+  partial AF overlap and VF episodes are left out.
+- Thresholds are max-F1 on **MIT-BIH DS1**. **DS2, SVDB and INCART are
+  held out.**
+- CIs are a 200× bootstrap over records, because windows overlap.
 
-Edge beats, runs only partly inside a window, and partial AF overlap are
-left out of that target, so they count as neither positive nor negative.
-Paced MIT-BIH records (102, 104, 107, 217) are excluded. INCART has no rhythm
-annotations, so it gets no af/sinus/brady/tachy targets. Leads: MIT-BIH MLII,
-SVDB ECG1, INCART lead I (the lead the model was trained on).
+## Accuracy (fp32)
 
-## Accuracy (pending)
+AUROC [95 % CI], then Se / PPV at the DS1 threshold. *pos* is positive
+windows, with records in brackets.
 
-Generated by `eval.py` into `results/fp32/tables.md`; paste here.
-Thresholds are chosen on MIT-BIH (max F1) and applied unchanged to SVDB and
-INCART, so only those two columns are out-of-sample.
-
-| target | MIT-BIH AUROC | SVDB AUROC | INCART AUROC | SVDB Se / PPV | INCART Se / PPV |
+| target (label group) | DS1 (dev) | DS2 | SVDB | INCART (lead I) | **held-out pooled** |
 |---|---|---|---|---|---|
-| pvc | – | – | – | – | – |
-| sve | – | – | – | – | – |
-| vrun | – | – | – | – | – |
-| svt | – | – | – | – | – |
-| af | – | – | – | – | n/a |
-| sinus | – | – | n/a | – | n/a |
-| pause | – | – | – | – | – |
+| ≥ 1 PVC (pvc) | 0.981 [0.96–1.00] 0.86 / 0.93 | 0.987 [0.97–1.00] 0.89 / 0.92 | 0.950 [0.92–0.97] 0.78 / 0.88 | 0.972 [0.96–0.98] 0.88 / 0.93 | **0.965** [0.95–0.97] 0.84 / 0.91 · pos 21,793 (153) |
+| ≥ 1 PAC/SVE (pac) | 0.929 [0.89–0.97] 0.73 / 0.79 | 0.869 [0.80–0.95] 0.44 / 0.43 | 0.926 [0.90–0.95] 0.82 / 0.78 | 0.964 [0.93–0.98] 0.92 / 0.32 | **0.922** [0.89–0.95] 0.81 / 0.60 · pos 11,014 (125) |
+| V run ≥ 3 (VT or wide-QRS tachy) | 0.949 [0.91–0.98] 0.43 / 0.24 | 0.876 [0.77–0.97] 0.25 / 0.03 | 0.868 [0.81–0.93] 0.30 / 0.06 | 0.897 [0.86–0.94] 0.45 / 0.12 | **0.888** [0.86–0.92] 0.39 / 0.08 · pos 530 (54) |
+| SVT: S run ≥ 3 or SVTA (svt) | 0.933 [0.72–0.99] 0.49 / 0.62 | 0.957 [0.92–0.99] 0.03 / 0.25 | 0.922 [0.84–0.96] 0.49 / 0.28 | 0.789 [0.69–0.89] 0.00 / 0.00 | **0.912** [0.86–0.95] 0.28 / 0.13 · pos 807 (57) |
+| AF/AFL ≥ 50 % of window (afib, aflutter) | 1.000 0.99 / 0.96 | 0.997 [0.99–1.00] 0.93 / 0.96 | n/a¹ | 0.995 [0.98–1.00] 0.68 / 1.00 | **0.991** [0.97–1.00] 0.83 / 0.97 · pos 1,966 (8) |
+| pause: RR > 2 s (pause, SA/AV block) | 0.968 [0.75–0.99] 0.50 / 0.15 | 0.965 [0.92–0.98] 0.84 / 0.22 | – | – | **0.985** [0.97–0.99] 0.84 / 0.08 · pos 141 (2) |
+| sinus bradycardia (< 60 bpm) | 1.000 0.99 / 0.99 | 1.000 0.99 / 0.98 | n/a¹ | n/a¹ | **1.000** 0.99 / 0.98 |
+| sinus tachycardia (> 100 bpm) | 1.000 1.00 / 1.00 | 1.000 0.98 / 1.00 | n/a¹ | n/a¹ | **1.000** 0.98 / 1.00 |
+| sinus rhythm vs non-sinus | 0.819 | 0.774 | n/a¹ | n/a¹ | 0.761² |
 
-## Phone feasibility (measured)
+¹ SVDB has no rhythm annotations in its `.atr` files. Only 6 INCART
+records do (AF in 3, counting WPW-AF).
+² At max F1 the sinus label flags every window (Sp 0); only the AUROC is
+informative.
 
-Measured with `export_onnx.py --random-weights`. Size and speed do not depend
-on weight values. The real-weight run only adds the int8 accuracy drift.
-Full output: `results/random_weights/phone.md`.
+**INCART lead I vs lead II** (AUROC, Se / PPV):
 
-**Model:** 30.8 M parameters, **1.14 GMAC per 10 s window**. The 370 MB
-checkpoint is about 3× the fp32 weights; it probably also holds optimiser state.
+| lead | PVC | PAC | V run | AF |
+|---|---|---|---|---|
+| I | 0.972, 0.88 / 0.93 | 0.964, 0.92 / 0.32 | 0.897, 0.45 / 0.12 | 0.995, 0.68 / 1.00 |
+| II | 0.985, 0.95 / 0.93 | 0.985, 0.80 / 0.87 | 0.920, 0.64 / 0.16 | 1.000, 0.99 / 0.99 |
 
-| format | size | notes |
-|---|---:|---|
-| ONNX fp32 | 123 MB | matches torch to 2e-4 in probability |
-| ONNX int8 dynamic | 31 MB | ConvInteger kernels: **2–3× slower** than fp32 on CPU; don't use |
-| ONNX int8 static (QDQ, per-channel, 32 calibration windows) | 32 MB | fastest; accuracy drift still to be measured with real weights and real calibration windows |
+The model, trained on lead I, did better on lead II here. A chest strap gives
+yet another lead, so per-lead differences of this size should be expected on
+the H10.
 
-CPU latency per 10 s window (Intel Xeon @ 2.1 GHz cloud VM, 4 vCPU,
-onnxruntime 1.31, torch 2.14):
+**ECGFounder vs the rule pipeline on the same windows** (held-out, Se / PPV;
+from `eval.py --with-rules`):
 
-| runtime | 1 thread, batch 1 | 1 thread, batch 32 | 4 threads, batch 32 |
+| target | rules | ECGFounder | rules AND model | rules OR model |
+|---|---|---|---|---|
+| ≥ 1 V | 0.92 / 0.78 | 0.84 / 0.91 | 0.80 / 0.95 | 0.96 / 0.76 |
+| V run ≥ 3 | 0.54 / 0.09 | 0.39 / 0.08 | 0.23 / 0.31 | 0.69 / 0.07 |
+| ≥ 1 S | 0.69 / 0.65 | 0.81 / 0.60 | 0.62 / 0.82 | 0.88 / 0.54 |
+| AF | 0.36 / 0.55 | 0.83 / 0.97 | 0.33 / 0.97 | 0.85 / 0.74 |
+
+For AF the model adds the most value. For V and S, AND with the rules
+mainly buys precision. The full benchmark, which adds heartKIT, is in
+`../benchmark/RESULTS.md`.
+
+## int8 static ONNX vs fp32
+
+The int8 model is calibrated on 64 DS1 windows, and thresholds are re-chosen
+on DS1. AUROC on held-out data, pooled:
+
+| target | fp32 | int8 static | Δ |
 |---|---:|---:|---:|
-| torch fp32 | 51 ms | 34 ms | 12 ms |
-| ONNX fp32 | 48 ms | 45 ms | 14 ms |
-| ONNX int8 dynamic | 138 ms | 118 ms | 53 ms |
-| **ONNX int8 static** | **25 ms** | **22 ms** | 12 ms |
+| ≥ 1 PVC | 0.965 | 0.957 | −0.008 |
+| ≥ 1 PAC | 0.922 | 0.901 | −0.021 |
+| V run ≥ 3 | 0.888 | 0.850 | −0.038 |
+| SVT | 0.912 | 0.853 | −0.059 |
+| AF | 0.991 | 0.985 | −0.006 |
+| pause | 0.985 | 0.950 | −0.035 |
 
-Preprocessing (filters + median baseline + z-score) adds about 8 ms per window.
+AF and PVC barely move. V-run and SVT lose 0.04–0.06 AUROC. Per window,
+the probabilities shift by 0.035 on average and by up to 0.76. Use int8
+for AF and PVC screening, or as a second reader on flagged windows. Keep
+fp32 if V-run ranking matters.
 
-**Pixel 8a (Tensor G3) – estimate, not measured.** A day is 8,640
-non-overlapping 10 s windows, or 17,280 with the 5 s step. That is
-about 10 TMAC per day. If one Cortex-A715 core is about 2–4× slower than this
-VM core, static int8 takes about 50–100 ms per window plus about 15–30 ms of
-preprocessing:
+## Phone feasibility
 
-| | per window | 8,640 windows/day | 17,280 windows/day |
-|---|---:|---:|---:|
-| int8 static, one mid core (estimate) | 65–130 ms | 9–19 min CPU | 19–37 min CPU |
-| fp32, one mid core (estimate) | 110–220 ms | 16–32 min CPU | 32–63 min CPU |
+Measured with `export_onnx.py` on real weights (Intel Xeon 2.1 GHz cloud
+vCPU, onnxruntime 1.31). Output: `results/fp32/phone.md`.
 
-**Verdict: realistic.** About 15–40 CPU-minutes a day on one core, batched
-every hour (about 1 min of work per hour) or run while charging, should cost
-low single-digit percent of battery. Memory is about 32 MB (int8) or about
-123 MB (fp32) for weights. The APK grows by the model plus the onnxruntime-android
-AAR. The first step on the phone should be a real benchmark (onnxruntime
-`onnxruntime_perf_test`, or a timing loop in the app) before relying on these
-numbers. The XNNPACK execution provider may be faster again.
+| format | size | max abs Δp vs torch | 1 thread, batch 1 | 4 threads, batch 32 |
+|---|---:|---:|---:|---:|
+| torch fp32 | 370 MB ckpt | – | 62 ms | 11 ms |
+| ONNX fp32 | 123 MB | < 1e-4 | 48 ms | 15 ms |
+| ONNX int8 dynamic | 31 MB | 0.76 | 159 ms (slower) | 71 ms |
+| **ONNX int8 static** | **32 MB** | 0.76 | **19 ms** | 9 ms |
+
+Preprocessing (filters, median baseline, z-score) adds about 11 ms per
+window. The model needs 1.14 GMAC per 10 s window.
+
+**Export bug found and fixed.** net1d zero-pads before MaxPool, and
+onnxruntime's optimiser folds that Pad into MaxPool's own `pads`. Those pad
+with −∞ instead of 0, which changed logits by up to 0.8 (probability by up
+to 0.17) as soon as a sequence length became odd. `export_onnx.py` now
+writes the pad as a Concat of zeros, and ONNX fp32 matches torch to 1e-5
+with all optimisations on.
+
+**Pixel 8a (Tensor G3), estimate, not measured.** Assume a Cortex-A715
+core is 2–4× slower than this vCPU. Then static int8 costs about 40–80 ms
+plus 20–40 ms of preprocessing per window. That makes **9–17 CPU-minutes a
+day** for 8,640 windows, or 17–35 for 17,280 with the 5 s step. Running
+every window is **realistic** in batches while charging. Run only on
+windows other detectors flagged, a few hundred a day, it costs seconds.
+Measure on the phone before relying on this; the onnxruntime XNNPACK
+execution provider may be faster.
 
 ## Honest limits
 
-- **Domain shift.** ECGFounder learned from hospital 12-lead resting ECGs
-  (Harvard-Emory ECG Database); the 1-lead model saw **lead I** only. The H10
-  is a horizontal bipolar chest-strap lead (roughly CM5 / V5–V6-like), recorded
-  ambulatory with motion artefact, at **130 Hz**. Downsampling to 130 Hz
-  removes everything above about 65 Hz and blunts QRS onsets; the evaluation
-  reproduces that, but not the strap's own electrode noise, motion, or
-  amplitude. MIT-BIH and SVDB are not lead I either, so they also test lead
-  shift.
-- **Label semantics.** The labels are statements from machine and
-  cardiologist reports about a whole 10 s ECG, like "atrial fibrillation"
-  or "with premature ventricular complexes". They are window labels, not
-  beat labels: the model can say "this window has PVCs" but cannot **count**
-  them or say which beat. Holter burden (PVCs per hour, % AF) still needs a
-  beat detector.
-- **One lead.** P waves, QRS axis and width are hard to judge in one lead.
-  Expect PAC vs. sinus arrhythmia, aberrancy vs. PVC, flutter vs. sinus
-  tachycardia, and 1st-degree AV block to be weak. Wide-complex labels may
-  confuse with bundle branch block in MIT-BIH (L/R beats).
-- **Evaluation data.** It is small: 44 + 78 + 75 records, a handful of VT
-  and SVT episodes, mostly old Holter tapes. Windows overlap, so the CIs are
-  bootstrapped over records. Thresholds tuned on MIT-BIH may not suit a
-  healthy wearer, whose base rate of arrhythmia is far lower. A
-  0.95-specificity flagger on 17,280 windows a day is still about 860 false
-  flags a day, so thresholds must be set for low daily false-alarm counts.
-- **Not certified.** It is not a medical device, not CE/FDA cleared, and not
-  validated on H10 recordings with a reference. To claim it matches a
-  commercial app such as Kardi Ai would take a head-to-head test on the same
-  H10 recordings, read by a cardiologist. This page does not have that
-  evidence.
-- **Licences.** ECGFounder's code and weights are MIT (notice kept in
-  `third_party/`). Icentia11k, for fine-tuning, is CC BY-NC-SA 4.0. A
-  model fine-tuned on it is fine for personal use but should not be
-  redistributed commercially.
+- **Domain shift.**
+  - The model learned from hospital 12-lead resting ECGs and saw lead I
+    only. The H10 is an ambulatory chest-strap lead at 130 Hz.
+  - Our simulation reproduces the 130 Hz bandwidth, but not strap noise,
+    motion or electrode contact.
+  - Results vary by lead (INCART I vs II above).
+- **Window labels, not beats.** The model says "this window has PVCs"; it
+  cannot count them, place them, or measure burden.
+- **One lead.** PAC vs sinus arrhythmia, aberrancy vs PVC, and AV block are
+  hard. The pause/AV-block labels are not usable (PPV 0.08).
+- **Evaluation data.**
+  - The databases are small and arrhythmia-rich: AF is in 8 held-out
+    patients, pauses in 2.
+  - Windows overlap, so the CIs are bootstrapped over records.
+  - Thresholds from DS1 are not tuned for a healthy wearer's base rate.
+- **Not certified.** This is not a medical device, and the model has not
+  been validated on real H10 recordings against a cardiologist.
+- **Licences.**
+  - ECGFounder code and weights: MIT (notice in `third_party/`).
+  - Icentia11k, for any fine-tuning: CC BY-NC-SA 4.0, so a model trained
+    on it is for non-commercial use.
 
-## Recommendation (provisional until the accuracy run)
+## Recommendation
 
-1. **Combine with the rule-based beat counter. Do not use the model alone.**
-   The rule pipeline (`analysis/`) stays primary for anything that needs
-   beats or timing: PVC/PAC counts and burden, couplets and runs, pauses,
-   HR < 40 and HR > 220. The last two are rate rules, not AI tasks. Use
-   ECGFounder as a second, independent reader per 10 s window for **rhythm**
-   labels, where window labels fit: AF/flutter, SVT, VT/wide-complex
-   tachycardia. Run it as a filter on windows the rules already flagged, to
-   remove noise false positives and to name the rhythm. Run it on all windows
-   only for AF detection, which rules handle poorly in one lead.
-2. **Decide on fine-tuning from the numbers.** As a rule of thumb, if the
-   out-of-sample (SVDB + INCART) AUROC is ≥ 0.95 for af and ≥ 0.90 for
-   pvc/vrun at clinically usable PPV, keep the model as-is and tune
-   thresholds. Otherwise **fine-tune on Icentia11k**: 11k patients, a
-   single-lead chest patch at 250 Hz, beat (N/S/V) and rhythm (AF/AFL)
-   labels, much closer to the H10. Resample it to 130 Hz, train a window head
-   (and perhaps a per-beat head) on the ECGFounder backbone (`ft_1lead_ECGFounder`
-   in the upstream repo), and keep MIT-BIH/SVDB/INCART as external test sets
-   only. Expect fine-tuning to help most for sve/pvc and for the 130 Hz
-   chest-lead shift.
-3. **On the phone, use ONNX int8 static** (32 MB, about 2× faster than fp32),
-   once its accuracy drift on real data is checked
-   (`eval.py --tag int8_static`). A cheaper alternative is to run the model
-   offline on the PC with the existing analysis, since the phone only needs to
-   record.
+- **Use ECGFounder as a second reader on flagged windows, not as the
+  primary detector.**
+  - Its value is AF/flutter confirmation (PPV 0.97), and naming the rhythm
+    on windows the rules or heartKIT flagged.
+  - The rules plus heartKIT should do the beat counting and V-run
+    detection. See `../benchmark/RESULTS.md` for the combined system and
+    its numbers.
+- **Fine-tuning on Icentia11k** (single chest lead, beat labels) is the next
+  step only if window-level V-run detection from ECGFounder is wanted.
+  Today the beat-level path (rules + heartKIT) is better for V runs, with
+  per-patient Se 81–83 % vs 56 %.
 
 ## Reproduce
 
 ```bash
 cd ai/ecgfounder
 python -m venv ../.venv && ../.venv/bin/pip install -r requirements.txt
-../.venv/bin/python download_weights.py                    # record the printed sha256 here
-../.venv/bin/python eval.py                                 # -> results/fp32/tables.md
-../.venv/bin/python export_onnx.py                          # -> results/fp32/phone.md
-../.venv/bin/python eval.py --backend onnx --onnx weights/ecgfounder_1lead_int8_static.onnx --tag int8_static
+../.venv/bin/python download_weights.py
+../.venv/bin/python eval.py --with-rules                                  # results/fp32/
+../.venv/bin/python eval.py --db incartdb --incart-lead II --tag fp32_leadII
+../.venv/bin/python export_onnx.py                                        # results/fp32/phone.md
+../.venv/bin/python eval.py --with-rules --backend onnx --onnx weights/ecgfounder_1lead_int8_static.onnx --tag int8_static
 ```
-
-Checkpoint SHA-256: _to be recorded on first download_.
 
 ## Citation
 

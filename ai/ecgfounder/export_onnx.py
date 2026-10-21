@@ -267,7 +267,7 @@ def phone_md(info: dict) -> str:
     sz = info["size_mb"]
     lines = [f"Parameters {info['params'] / 1e6:.1f} M, {info['macs_per_window'] / 1e9:.2f} GMAC per 10 s window"
              + (f"; checkpoint file {sz['pth_checkpoint']:.0f} MB" if sz["pth_checkpoint"] else "") + ".", "",
-             f"| model | size MB | max abs Δp vs torch fp32 | mean abs Δp |", "|---|---:|---:|---:|"]
+             "| model | size MB | max abs Δp vs torch fp32 | mean abs Δp |", "|---|---:|---:|---:|"]
     for name, key in (("onnx fp32", "onnx_fp32"), ("onnx int8 dynamic", "onnx_int8_dynamic"),
                       ("onnx int8 static", "onnx_int8_static")):
         d = info["parity"][name]

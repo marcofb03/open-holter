@@ -3,7 +3,8 @@
 Wraps the open **ECGFounder** foundation model (1-lead checkpoint, 150 labels)
 so it can score Polar H10 recordings in sliding 10 s windows, and measures how
 well it does on H10-like versions of three annotated PhysioNet databases.
-Results and the recommendation are in [RESULTS.md](RESULTS.md).
+Results are in [RESULTS.md](RESULTS.md); the comparison with the rule
+pipeline and heartKIT is in [../benchmark/RESULTS.md](../benchmark/RESULTS.md).
 
 > Not a medical device. Outputs are screening flags for a cardiologist to
 > review, never a diagnosis.
@@ -32,9 +33,9 @@ Columns: `t_start_s` and one probability per label group (`pvc`, `pac`, `vt`,
 ## Evaluate and export
 
 ```bash
-../.venv/bin/python eval.py                       # MIT-BIH, SVDB, INCART (auto-download to ../../data)
-../.venv/bin/python export_onnx.py                # ONNX fp32 + dynamic int8, parity, CPU latency
-../.venv/bin/python eval.py --backend onnx --onnx weights/ecgfounder_1lead_int8.onnx --tag int8
+../.venv/bin/python eval.py --with-rules          # MIT-BIH, SVDB, INCART (+ rule pipeline on the same windows)
+../.venv/bin/python export_onnx.py                # ONNX fp32 + int8 dynamic/static, parity, CPU latency
+../.venv/bin/python eval.py --with-rules --backend onnx --onnx weights/ecgfounder_1lead_int8_static.onnx --tag int8_static
 ```
 
 Each run writes `results/<tag>/tables.md` and `metrics.json`; per-window
@@ -46,7 +47,7 @@ probabilities are cached in `data/work/ecgfounder/<tag>/` (git-ignored).
 |---|---|
 | `infer.py` | resample → 10 s windows → ECGFounder preprocessing → probabilities |
 | `eval.py` | H10 simulation (→130 Hz→500 Hz), window ground truth, AUROC / Se / PPV |
-| `export_onnx.py` | ONNX export, int8 quantisation, size, parity, latency |
+| `export_onnx.py` | ONNX export (with a fix for an onnxruntime Pad/MaxPool fusion bug), int8 quantisation, size, parity, latency |
 | `download_weights.py` | fetches `1_lead_ECGFounder.pth` from Hugging Face |
 | `third_party/` | ECGFounder `net1d.py`, `tasks.txt` and licence (MIT) |
 

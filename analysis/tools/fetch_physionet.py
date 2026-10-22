@@ -44,17 +44,21 @@ EXTENSIONS = (".hea", ".dat", ".atr")
 NO_RECORDS_FILE = {"shdb-af"}
 
 
-def _get(url: str, timeout: float = 60, tries: int = 5) -> bytes:
-    for k in range(tries):  # long transfers are sometimes cut: retry with backoff
+RETRY_HTTP = {429, 500, 502, 503, 504}  # throttling and server hiccups (S3 answers 503 under load)
+
+
+def _get(url: str, timeout: float = 60, tries: int = 7) -> bytes:
+    for k in range(tries):  # long transfers are sometimes cut: retry with backoff (2 s .. 2 min)
         try:
             with urllib.request.urlopen(url, timeout=timeout) as r:
                 return r.read()
-        except urllib.error.HTTPError:
-            raise
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_HTTP or k == tries - 1:
+                raise  # 404 etc.: a real answer, not a hiccup
         except (OSError, http.client.HTTPException):
             if k == tries - 1:
                 raise
-            time.sleep(2 ** (k + 1))
+        time.sleep(min(2 ** (k + 1), 120))
     raise AssertionError
 
 

@@ -172,3 +172,26 @@ def test_purge_deadline_from_oldest_shard(tmp_path):
     os.utime(a, (1_000_000, 1_000_000))
     assert train.purge_deadline([a, b], 14) == 1_000_000 + 14 * 86400
     assert train.purge_deadline([a, b], 0) == float("inf") and train.purge_deadline([], 14) == float("inf")
+
+
+def test_prep_repair_only_listed_patients(tmp_path, monkeypatch):
+    pytest.importorskip("h5py")
+    import json
+    import h5py
+    import prep
+    import sources
+
+    fs = 250.0
+    x, beats = _ecg(fs)
+    monkeypatch.setattr(sources, "patients", lambda src, policy: [(f"p{i}", "train", None) for i in range(5)])
+    monkeypatch.setattr(sources, "read_patient", lambda src, pid, pl, tmp: [("mitdb", h10.raw16(x), fs, _ref(beats))])
+    monkeypatch.setattr(sources, "labels_override", lambda ns, ref, y: y)
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setattr(prep, "ProcessPoolExecutor", ThreadPoolExecutor)  # keep the patches (spawn would not)
+    prep.run_task("icentia11k", 0, 1, tmp_path, tmp_path, 1, "benchmark", None, only=["p3", "p1"])
+    files = list((tmp_path / "icentia11k" / "train").glob("repair-*.h5"))
+    assert len(files) == 1
+    with h5py.File(files[0]) as f:
+        assert sorted(json.loads(f.attrs["patients"])) == ["p1", "p3"]
+    with pytest.raises(SystemExit):
+        prep.run_task("icentia11k", 0, 1, tmp_path, tmp_path, 1, "benchmark", None, only=["nope"])

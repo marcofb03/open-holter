@@ -129,6 +129,13 @@ def validate(net, name: str, stream: shards.ChunkStream, max_chunks: int, bf16: 
     return {"score": float(np.mean(vals)) if vals else float("nan"), "se_at_fp1": res, "recall": rec, "n": int(len(y))}
 
 
+def _cpu_flags() -> str:
+    try:
+        return Path("/proc/cpuinfo").read_text()
+    except OSError:  # not Linux: no check
+        return "avx512_bf16"
+
+
 def save(path: Path, obj: dict) -> None:
     import torch
 
@@ -163,6 +170,9 @@ def main() -> None:
 
     t_start = time.time()
     args.run.mkdir(parents=True, exist_ok=True)
+    if args.bf16 and args.device == "cpu" and "avx512_bf16" not in _cpu_flags():
+        print("WARNING: --bf16 on a CPU without AVX-512 BF16 is emulated and ~35x slower "
+              "(submit_chain.sh constrains bf16 jobs to Zen 4 nodes)", file=sys.stderr, flush=True)
     if (args.run / "DONE").exists():
         print(f"{args.run}/DONE exists: nothing to do", file=sys.stderr)
         return

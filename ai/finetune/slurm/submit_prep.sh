@@ -13,7 +13,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/env.sh"
 cd "$SCR"
 PAR=${PAR:-4}; DL_THREADS=${DL_THREADS:-1}
-python "$REPO/ai/finetune/prep.py" noise --out "$SHARDS"            # NSTDB noise, seconds
+# NSTDB noise is only used by train.py --conversion random (not the default): NOISE=1 to build it.
+[ "${NOISE:-0}" = 1 ] && python "$REPO/ai/finetune/prep.py" noise --out "$SHARDS"
 # source:tasks, small sources first. Icentia11k: 300 tasks x ~37 patients (~4 GB of raw downloads each).
 SPECS="ptb-xl:20 cinc2017:4 cpsc2020:10 ltafdb:12 cpsc2021:8 shdb-af:16 afdb:4 icentia11k:300"
 if [ $# -gt 0 ]; then

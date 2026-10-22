@@ -100,7 +100,7 @@ def test_shard_roundtrip_and_resumable_stream(tmp_path):
                                                    "beat_y": np.arange(n, dtype=np.int8) % 4}, {"fs": 250.0})
         assert shards.is_complete(tmp_path / f"s{i}.h5")
     files = sorted(tmp_path.glob("*.h5"))
-    tf = lambda x, y, fs, rng: (x + rng.integers(0, 1000), y)  # noqa: E731
+    tf = lambda x, y, fs, rng, **kw: (x + rng.integers(0, 1000) + kw["epoch"], y)  # noqa: E731
 
     def take(stream, k):
         it = iter(stream)
@@ -126,3 +126,25 @@ def test_models_build_and_forward():
     w = models.build("ecgfounder", pretrained=False)
     xw = models.preprocess("ecgfounder", np.random.default_rng(0).standard_normal((2, h10.WIN)) * 500)
     assert xw.shape == (2, 1, 5000) and w(torch.from_numpy(xw)).shape == (2, models.N_WIN)
+
+
+def test_frames_cover_every_grid_position_and_frame0_is_deterministic():
+    fs = 250.0
+    x, beats = _ecg(fs)
+    ex = h10.examples("mitdb", h10.raw16(x), fs, _ref(beats))
+    q = h10.n_frames(fs)
+    assert q == 25 and h10.n_frames(500.0) == 50 and h10.n_frames(128.0) == 64
+    seg = ex["beat_x"][5:6].repeat(q, 0)
+    det = h10.convert(ex["beat_x"][5:6], fs, "beat")
+    fr = h10.convert_frames(seg, fs, "beat", np.arange(q))
+    assert np.allclose(fr[0], det[0], atol=1e-3)          # frame 0 = the deterministic conversion
+    assert len({np.round(r, 1).tobytes() for r in fr}) == q  # every frame is a different 130 Hz version
+    c = h10.BEAT // 2
+    peak = np.abs(fr[:, c - 20:c + 20]).argmax(1) + c - 20
+    assert np.all(np.abs(peak - c) <= 2)                    # beats stay centred on every frame
+    # frame ids: a different frame each epoch for an example, all frames used equally in an epoch
+    uid = np.arange(25_000, dtype=np.uint64)
+    f0, f1 = h10.frame_ids(uid, 0, fs), h10.frame_ids(uid, 1, fs)
+    assert np.all(f1 == (f0 + 1) % q)
+    counts = np.bincount(f0, minlength=q)
+    assert counts.min() > 0.8 * counts.mean()

@@ -20,7 +20,7 @@ brady tachy`) plus `noise`.
 
 | file | what |
 |---|---|
-| `h10.py` | H10-like conversion (130 Hz, strap-like front end, int16 µV), labels, examples, augmentation |
+| `h10.py` | H10-like conversion (130 Hz, strap-like front end, int16 µV; every frame for training), labels, examples |
 | `sources.py` | patient lists, patient-level splits, streaming readers for every source |
 | `prep.py` | one preprocessing array task → a few large HDF5 shards (idempotent) |
 | `shards.py` | shard writer, resumable chunk reader, NSTDB noise |
@@ -38,7 +38,7 @@ bash ~/open-holter/ai/finetune/slurm/setup_euler.sh          # venv, CPU torch, 
 cd /cluster/scratch/$USER/open-holter
 REPO=~/open-holter
 bash $REPO/ai/finetune/slurm/pilot_prep.sh                    # 1 task, 8 patients -> pilot/ (proxy check)
-sbatch $REPO/ai/finetune/slurm/measure_euler.sbatch           # 10 min: real step times on 48 cores
+sbatch $REPO/ai/finetune/slurm/measure_euler.sbatch           # 10 min: real step times (done: results/step_timing_euler*.md)
 bash $REPO/ai/finetune/slurm/submit_prep.sh                   # all arrays, one after another, <= 32 downloads
 python $REPO/ai/finetune/prep.py manifest --out shards        # when all prep jobs are done
 ```
@@ -49,15 +49,17 @@ for everyone if overused, so `submit_prep.sh` runs at most `PAR` (4) tasks at
 a time with `DL_THREADS` (1) download per worker: 4 x 8 x 1 = 32 concurrent
 downloads. Raise them only after the pilot, and moderately.
 
-Beat model, trained twice for the augmentation ablation (same epochs; chains of
-4 x 24 h, because 10 epochs are estimated at 20–80 h; a finished run writes
-`DONE` and the remaining jobs exit in seconds):
+Training: all three models on every 130 Hz frame of the real signal
+(`--conversion frames`, the default; see the plan, section 2), 24 CPUs per job.
+`AFTER` makes the first job of each chain wait for the last preprocessing array.
+A finished run writes `DONE` and the remaining jobs of its chain exit in seconds.
 
 ```bash
-bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4 24:00:00 beat_aug
-bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4 24:00:00 beat_noaug --no-augment
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4                          # 10 epochs, ~75 h
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh ecgfounder 5 24:00:00 ecgfounder --bf16   # 3 epochs, ~94 h
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh clef 5 24:00:00 clef --bf16               # 3 epochs, ~93 h
 # afterwards, wherever the benchmark caches are (ai/benchmark/frontend.py):
-python eval_beat.py runs/beat_aug runs/beat_noaug       # -> results/ablation.md
+python eval_beat.py runs/beat                           # the beat model on the benchmark
 ```
 
 Shards, runs and logs live in `/cluster/scratch/$USER/open-holter/`, which is

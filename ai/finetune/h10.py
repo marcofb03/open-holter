@@ -8,7 +8,16 @@ example is read:
         polyphase resampling to 130 Hz -> H10-like front end (first-order 0.5 Hz
         high-pass, as an AC-coupled strap amplifier, then a 2nd-order 40 Hz
         low-pass; both causal, like hardware) -> crop the margin
-    train (augment=True, a new draw every epoch)
+    train, conversion "frames" (the default; convert_frames): the same deterministic
+        conversion, but the 130 Hz grid starts at one of the n_frames(fs) distinct
+        sub-sample positions relative to the source samples (25 for 250 Hz, 50 for
+        500 Hz, 64 for 128 Hz). The H10 samples the heart at moments unrelated to the
+        beat, so every one of these frames is an equally valid H10-like version of the
+        same recording, and none is the "right" one. Each example gets a different frame
+        every epoch (frame_ids), and every epoch uses all frames equally. Windows also get
+        a random crop start (a different 10 s frame of the same real signal). Nothing is
+        added to the signal: no gain, filter, noise or rate changes.
+    train, conversion "random" (h10.convert with rng + augment; not used by default)
         resampling: source -> r Hz (r uniform 125-135) -> 130 Hz, each stage with
         a random method (polyphase, FFT or linear interpolation) and the second
         with a random sub-sample phase offset; front end with random corners
@@ -128,6 +137,46 @@ def convert(seg: np.ndarray, fs: float, kind: str, rng: np.random.Generator | No
     s = m + rng.integers(-max_shift, max_shift + 1, len(y))
     s = np.clip(s, 0, y.shape[1] - n_out)
     return np.stack([y[i, a:a + n_out] for i, a in enumerate(s)]).astype(np.float32)
+
+
+def n_frames(fs: float) -> int:
+    """Distinct positions of the 130 Hz grid relative to the samples of an fs-Hz source.
+
+    Starting the conversion j source samples later moves the 130 Hz grid by j * 130 / fs
+    output samples. With 130 / fs = p / q in lowest terms the fractional parts of j * p / q
+    are exactly the q values 0, 1/q, ..., (q-1)/q, so j = 0 .. q-1 gives every frame once,
+    each with the same polyphase filter (no extra interpolation)."""
+    return Fraction(FS / fs).limit_denominator(200).denominator
+
+
+def frame_ids(uid: np.ndarray, epoch: int, fs: float) -> np.ndarray:
+    """Frame of each example in this epoch: a fixed per-example start (hash of its uid) plus the
+    epoch, mod n_frames: a different frame every epoch for each example, all frames equally used."""
+    h = (np.asarray(uid, np.uint64) * np.uint64(0x9E3779B97F4A7C15)) >> np.uint64(33)
+    return ((h + np.uint64(epoch)) % np.uint64(n_frames(fs))).astype(np.int64)
+
+
+def convert_frames(seg: np.ndarray, fs: float, kind: str, frames: np.ndarray,
+                   rng: np.random.Generator | None = None) -> np.ndarray:
+    """Like convert(seg, fs, kind) (deterministic), but row i is converted on frame frames[i]
+    (0 .. n_frames(fs)-1; frame 0 is exactly the deterministic conversion). Beats stay centred
+    to within half a sample. rng: random crop start for windows only (train)."""
+    x = seg.astype(np.float64)
+    x -= x.mean(axis=1, keepdims=True)
+    m = int(round(MARGIN_S[kind] * FS))
+    n_out = OUT_LEN[kind]
+    r = Fraction(FS / fs).limit_denominator(200)
+    out = np.empty((len(x), n_out), np.float32)
+    frames = np.asarray(frames) % r.denominator
+    for j in np.unique(frames):
+        rows = np.flatnonzero(frames == j)
+        y = front_end(_poly(x[rows, j:], fs, FS))     # grid starts j source samples later
+        a = np.full(len(rows), m - int(round(j * r.numerator / r.denominator)))
+        if rng is not None and kind == "win":
+            a = a + rng.integers(-m, m + 1, len(rows))
+        a = np.clip(a, 0, y.shape[1] - n_out)
+        out[rows] = np.stack([y[k, s:s + n_out] for k, s in enumerate(a)])
+    return out
 
 
 def augment(x: np.ndarray, y: np.ndarray, kind: str, rng: np.random.Generator, noise=None) -> tuple[np.ndarray, np.ndarray]:

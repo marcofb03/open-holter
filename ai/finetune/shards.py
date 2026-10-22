@@ -62,7 +62,7 @@ class ChunkStream:
 
     kind: "win" or "beat". Each epoch visits every (shard, chunk) once in an order
     drawn from seed + epoch; rows inside a chunk are shuffled the same way.
-    transform(x_int16, y, fs, rng) -> (x, y) runs in `threads` prefetch threads
+    transform(x_int16, y, fs, rng, uid=, epoch=) -> (x, y) runs in `threads` prefetch threads
     (numpy / scipy release the GIL); rng is seeded from (seed, epoch, chunk), so
     a resumed run sees exactly the augmentation it would have seen.
     """
@@ -100,7 +100,8 @@ class ChunkStream:
             y = f[f"{self.kind}_y"][s:s + self.chunk]
         rng = np.random.default_rng([self.seed, epoch, k])
         p = rng.permutation(len(y))
-        return self.transform(x[p], y[p], self.fs[i], rng)
+        uid = (np.uint64(i) << np.uint64(32)) + (s + p).astype(np.uint64)  # stable id of each example
+        return self.transform(x[p], y[p], self.fs[i], rng, uid=uid, epoch=epoch)
 
     def __iter__(self):
         """Yields converted chunks; (epoch, pos) advances as each chunk is handed out."""

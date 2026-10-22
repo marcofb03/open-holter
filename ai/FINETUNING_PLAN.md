@@ -264,10 +264,48 @@ Expected total wall-clock: **about 3 days** (hybrid) versus **about 1 week**
 
 ## 7. Local augmentation ablation (small scale)
 
-**Not run.** A small local ablation was started in the cloud session that
-wrote this plan. It had not finished when the PR was merged, and no result was
-committed. The Euler ablation (`beat_aug` vs `beat_noaug`, section 2 and
-`finetune/README.md`) replaces it and is the one that decides.
+A small version of the ablation ran in this container to test the pipeline end to end and see the direction of the effect:
+- **Data:** Icentia11k patients 0–109; 104 train (an epoch is 270 k beats) and 6 val.
+- **Training:** the beat model, 3 epochs, once with augmentation and once with `--no-augment`, otherwise identical (about 2 h each on 3 threads).
+- **Evaluation:** `eval_beat.py` on the benchmark patients with beat labels: 33 held-out VT patients and 23 held-out frequent-PVC patients. heartKIT is scored the same way for reference.
+- **Resume test:** the runs survived a container restart by resuming from `last.pt`.
+
+Thresholds picked on tuning data, as the router does (`finetune/results/ablation.md`):
+
+| beat model | VT: held-out per-patient Se | VT false / day (long) | PVC: held-out Se | PVC PPV | PVC false / day |
+|---|---:|---:|---:|---:|---:|
+| heartKIT (published, 10,000 training patients) | 84.8 % (28/33) | 925 | 100 % (23/23) | 0.37 | 0.47 |
+| beat, augmented (104 patients, 3 epochs) | 78.8 % (26/33) | 1,082 | 95.7 % (22/23) | 0.41 | 0.38 |
+| beat, no augmentation (same) | 72.7 % (24/33) | 619 | 95.7 % (22/23) | 0.26 | 0.74 |
+
+The tuning step chose different thresholds for the two models, so the rows above
+are not a like-for-like comparison. At the same thresholds (patients found;
+PPV; false findings per day on the long recordings;
+`finetune/results/ablation_fixed_thresholds.md`):
+
+| model | vt: heartKIT ≥ 0.3 | vt: heartKIT ≥ 0.5 | vt: heartKIT ≥ 0.7 | vt: heartKIT ≥ 0.9 | pvc: heartKIT burden ≥ 0.5 % | pvc: heartKIT burden ≥ 1 % |
+|---|---|---|---|---|---|---|
+| heartKIT (published) | 26/33; PPV 0.03; 578/day | 22/33; PPV 0.19; 71/day | 14/33; PPV 0.70; 3/day | 1/33; PPV 0.96; 0/day | 22/23; PPV 0.36; 0.47/day | 22/23; PPV 0.42; 0.36/day |
+| beat, augmented (local) | 18/33; PPV 0.03; 653/day | 15/33; PPV 0.03; 415/day | 9/33; PPV 0.02; 247/day | 6/33; PPV 0.01; 87/day | 20/23; PPV 0.47; 0.28/day | 20/23; PPV 0.59; 0.17/day |
+| beat, no augmentation (local) | 16/33; PPV 0.02; 657/day | 12/33; PPV 0.05; 190/day | 8/33; PPV 0.07; 50/day | 2/33; PPV 0.01; 7/day | 23/23; PPV 0.46; 0.32/day | 21/23; PPV 0.53; 0.23/day |
+
+**Reading.**
+- **VT:** augmentation found more VT patients at every threshold (6 vs 2
+  at p ≥ 0.9, 15 vs 12 at 0.5). It also produced more false V runs at the
+  middle thresholds (415 vs 190 per day at 0.5).
+- **PVC:** augmentation produced fewer false PVC findings (0.17 vs 0.23 per
+  day at a 1 % burden) and found one fewer PVC patient (20/23 vs 21/23 at 1 %).
+- **Overall:** the rule of section 2 (keep augmentation only if VT/PVC
+  sensitivity does not drop and false findings fall) is **not met either
+  way** at this scale.
+- **heartKIT** beats both small models on VT by a wide margin. 104 patients
+  and 3 epochs are about 1 % of the planned training, so this run tests the
+  pipeline and the direction of the effect, not the decision.
+- **Decision:** the full ablation on Euler (`beat_aug` vs `beat_noaug`,
+  section 2 and `finetune/README.md`) is still the one that decides. If
+  augmentation keeps its VT sensitivity gain there, its extra false runs are
+  what the noise class and the router's confirmation step are for. If not,
+  train without it.
 
 ## 8. The 15-day purge
 

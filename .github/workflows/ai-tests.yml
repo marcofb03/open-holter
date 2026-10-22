@@ -23,12 +23,22 @@ jobs:
           python-version: "3.12"
       # The tests need neither torch, TFLite, model weights nor PhysioNet data:
       # preprocessing parity, windowing, label groups, ground-truth rules and
-      # heartKIT output handling.
+      # heartKIT output handling, CLEF preprocessing, the benchmark's findings and
+      # router logic, and the fine-tuning kit's conversion, augmentation and shards.
       - name: Install
-        run: pip install numpy scipy pytest
+        run: pip install numpy scipy pytest h5py bottleneck
       - name: Test ecgfounder
         working-directory: ai/ecgfounder
         run: python -m pytest -q tests
       - name: Test heartkit
         working-directory: ai/heartkit
+        run: python -m pytest -q tests
+      - name: Test clef
+        working-directory: ai/clef
+        run: python -m pytest -q tests
+      - name: Test benchmark (findings, router, splits)
+        working-directory: ai/benchmark
+        run: python -m pytest -q tests
+      - name: Test finetune (H10 conversion, augmentation, shards)
+        working-directory: ai/finetune
         run: python -m pytest -q tests

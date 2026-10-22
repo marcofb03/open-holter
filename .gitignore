@@ -5,12 +5,8 @@ reports/
 *.edf
 *.parquet
 
-# Downloaded public datasets (re-download with the tools)
-data/mitdb/
-data/svdb/
-data/incartdb/
-data/icentia11k/
-data/work/
+# Downloaded public datasets and caches (re-download / recompute with the tools)
+data/
 
 # Python
 .venv/
@@ -37,3 +33,8 @@ ai/**/weights/
 *.pt
 *.onnx
 *.tflite
+
+# Fine-tuning runs and shards (live on the cluster scratch; never commit)
+ai/finetune/runs/
+ai/finetune/shards/
+*.h5

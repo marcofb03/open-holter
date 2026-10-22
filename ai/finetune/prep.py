@@ -4,6 +4,7 @@
     python prep.py ltafdb     --task-id 0 --n-tasks 4   --out ...
     python prep.py noise      --out ...                  # NSTDB bw/em/ma for augmentation (1 small file)
     python prep.py manifest   --out ...                  # counts, sizes and SHA-256 of every shard
+    python prep.py icentia11k --patients p00027 p00105 --out ...   # repair: only these patients
 
 Task i of n handles the i-th contiguous block of the source's patients (see
 sources.py for the patient lists and splits). For each patient it downloads the
@@ -73,14 +74,25 @@ def one_patient(args: tuple) -> tuple[str, str, dict | None, float, float]:
     return pid, split, ex, time.perf_counter() - t0, t_read
 
 
-def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, policy: str, limit: int | None) -> None:
-    paths = {s: shard_path(out, source, s, i, n) for s in SPLITS}
+def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, policy: str, limit: int | None,
+             only: list[str] | None = None) -> None:
+    if only:  # repair shards: named after the patient list, so a re-run of the same list is a no-op
+        tag = hashlib.sha256(" ".join(sorted(only)).encode()).hexdigest()[:10]
+        paths = {s: out / source / s / f"repair-{tag}.h5" for s in SPLITS}
+    else:
+        paths = {s: shard_path(out, source, s, i, n) for s in SPLITS}
     if all(shards.is_complete(p) for p in paths.values()):
         print(f"{source} task {i}/{n}: already complete", file=sys.stderr)
         return
     pts = sources.patients(source, policy)
-    block = np.array_split(np.arange(len(pts)), n)[i]
-    todo = [pts[k] for k in block][:limit]
+    if only:
+        todo = [t for t in pts if t[0] in set(only)]
+        missing = set(only) - {t[0] for t in todo}
+        if missing:
+            raise SystemExit(f"{source}: unknown patients {sorted(missing)}")
+    else:
+        block = np.array_split(np.arange(len(pts)), n)[i]
+        todo = [pts[k] for k in block][:limit]
     print(f"{source} task {i}/{n}: {len(todo)} patients", file=sys.stderr, flush=True)
     acc: dict[str, list] = {s: [] for s in SPLITS}
     pids: dict[str, list] = {s: [] for s in SPLITS}
@@ -149,6 +161,8 @@ def main() -> None:
                     help="parallel downloads per worker (Euler: total = tasks x workers x this, via the ETH proxy)")
     ap.add_argument("--policy", choices=["benchmark", "all"], default="benchmark")
     ap.add_argument("--limit", type=int, default=None, help="patients per task (testing)")
+    ap.add_argument("--patients", nargs="+", default=None,
+                    help="repair: process only these patients into repair-<hash>.h5 shards (repair_prep.sh)")
     args = ap.parse_args()
     os.environ["OH_DL_THREADS"] = str(args.dl_threads)  # read by sources.read_patient in the workers
     if args.source == "manifest":
@@ -158,7 +172,8 @@ def main() -> None:
         if not shards.is_complete(p):
             shards.write_shard(p, sources.noise_arrays(), {"source": "nstdb", "fs": h10.FS, "unit": "uV"})
         return
-    run_task(args.source, args.task_id, args.n_tasks, args.out, args.tmp, args.workers, args.policy, args.limit)
+    run_task(args.source, args.task_id, args.n_tasks, args.out, args.tmp, args.workers, args.policy, args.limit,
+             args.patients)
 
 
 if __name__ == "__main__":

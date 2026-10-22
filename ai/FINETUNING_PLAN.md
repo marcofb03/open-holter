@@ -195,19 +195,32 @@ windows and 2,450 beats per patient, 8 MB). About **20 M training windows** and
 
 ## 5. Wall-clock on Euler (CPU path, measured speeds)
 
-| step | compute (measured speed) | jobs | wall-clock |
-|---|---|---|---|
-| preprocessing, all sources | pilot: ~300 s per Icentia11k patient, download-bound (~2 s per file through the proxy) | 375 array tasks, 8 cores, 4 at a time, arrays one after another | **~1.5 days** (Icentia11k ~29 h) |
-| beat model, 10 epochs (~235 M beats, all frames) | 875 / s → **~75 h** | 4 x 24 h, 24 CPUs | ~3–3.5 days |
-| ECGFounder, 3 epochs (~60 M windows, bf16) | 178 / s → **~94 h** | 5 x 24 h, 24 CPUs | ~4–4.5 days |
-| CLEF-Medium, 3 epochs (bf16) | ~180 / s → **~93 h** | 5 x 24 h, 24 CPUs | ~4–4.5 days |
+**Stopping rule: train until the validation score stops improving**, not for a
+fixed number of epochs (`train.py`):
 
-All three chains wait for the preprocessing (`AFTER=<last prep array>`) and
-then run side by side if the guest share allows three 24-CPU jobs at once:
-**about 6 days in all**. If they have to run one after another it is ~11 days
-after preprocessing, which comes close to the 15-day purge of the shards
-(section 8); the rented GPU (section 6) is then the way out for the two
-foundation models.
+| | beat model | ECGFounder, CLEF |
+|---|---|---|
+| validation | every 0.25 epoch, 51,200 beats of validation patients | every 0.25 epoch, 25,600 windows |
+| score (also picks `best.pt`) | mean V and S sensitivity at 1 % false positives among normal beats | mean sensitivity at 95 % specificity over the 9 targets |
+| lower the LR (x 0.3) | after 4 validations (1 epoch) without a gain > 0.002 | after 2 validations (0.5 epoch) |
+| stop | after 10 validations (2.5 epochs) without a gain: at least two LR reductions first | after 6 validations (1.5 epochs) |
+| cap | 25 epochs (~9 days at 770 beats/s) | 6 epochs (~10 days at ~136 windows/s on Zen 4) |
+| purge guard | stop 14 days after the oldest shard was written | same |
+
+Measured speeds in the real training loop: beat ~770 beats/s (EPYC 7742, fp32,
+24 CPUs); ECGFounder ~137 and CLEF ~135 windows/s (EPYC 9654, bf16, 24 CPUs).
+One epoch is ~8.5 h (beat, ~23.5 M beats) and ~41 h (windows, ~20 M windows).
+
+| step | jobs | wall-clock |
+|---|---|---|
+| preprocessing, all sources | 375 array tasks, 8 cores, 4 at a time, arrays one after another | ~1.5 days (Icentia11k ~29 h, download-bound) |
+| beat model | 10 x 24 h, 24 CPUs, any node | until plateau, at most ~9 days |
+| ECGFounder | 11 x 24 h, 24 CPUs, Zen 4 only (bf16) | until plateau, at most ~10 days |
+| CLEF-Medium | 11 x 24 h, 24 CPUs, Zen 4 only (bf16) | until plateau, at most ~10 days |
+
+The three chains wait for the preprocessing and then run side by side if the
+guest share allows. A model that is still improving when it reaches its cap or
+the purge deadline continues on a rented GPU (section 6) from its `last.pt`.
 
 The ≤ 4 h variant (`submit_chain.sh MODEL N 04:00:00`) needs 6x as many jobs
 and, at the observed ~10 h queue for short jobs, is slower in wall-clock. Use

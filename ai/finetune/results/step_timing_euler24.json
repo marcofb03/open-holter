@@ -1,0 +1,31 @@
+{
+ "cpu": "AMD EPYC 9654 96-Core Processor",
+ "threads": 24,
+ "torch": "2.14.1+cpu",
+ "models": {
+  "ecgfounder": {
+   "batch": 64,
+   "pipeline_ms_per_example_1thread": 0.8159619413845576,
+   "fp32": {
+    "s_per_step": 0.5416036929964321,
+    "examples_per_s": 118.16758420888686
+   },
+   "bf16": {
+    "s_per_step": 0.3592806689994177,
+    "examples_per_s": 178.13371417459626
+   }
+  },
+  "beat": {
+   "batch": 512,
+   "pipeline_ms_per_example_1thread": 0.03997210546913266,
+   "fp32": {
+    "s_per_step": 0.5849952669959748,
+    "examples_per_s": 875.220756279252
+   },
+   "bf16": {
+    "s_per_step": 0.53588961600326,
+    "examples_per_s": 955.4206402030476
+   }
+  }
+ }
+}

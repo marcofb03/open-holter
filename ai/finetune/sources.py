@@ -246,7 +246,7 @@ def noise_arrays() -> dict[str, np.ndarray]:
 
     out = {}
     with tempfile.TemporaryDirectory() as tmp:
-        fp.fetch("nstdb", ["bw", "em", "ma"], out=Path(tmp))
+        fp.fetch("nstdb", ["bw", "em", "ma"], out=Path(tmp), aws_first=True)  # physionet.org can stall
         for k in ("bw", "em", "ma"):
             rec = wfdb.rdrecord(str(Path(tmp) / k), channels=[0])
             out[k] = h10._poly(1000.0 * rec.p_signal[:, 0], rec.fs, h10.FS).astype(np.float32)

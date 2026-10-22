@@ -2,7 +2,7 @@
 
     python train.py --model beat       --shards $SCRATCH/open-holter/shards --run $SCRATCH/open-holter/runs/beat
     python train.py --model ecgfounder --shards ... --run .../ecgfounder --hours 23.5
-    python train.py --model beat --no-augment --run .../beat_noaug         # augmentation ablation
+    python train.py --model beat --conversion fixed --run .../beat_fixed   # one fixed frame only
 
 Resumable by design (cluster jobs are killed at their time limit):
   * a checkpoint (model, optimiser, scheduler, data-stream position, step, best
@@ -21,7 +21,13 @@ Recall-first objective:
   beats    cross-entropy with class weights sqrt(N / (K n_c)) x {S 1.5, V 2.0};
            score = mean of the V and S sensitivities at 1 % false positives among
            normal beats
-Augmentation (h10.convert / h10.augment) is applied to the train split only.
+Conversion of the train split (--conversion; val and test always use the fixed frame 0):
+  frames  (default) every 130 Hz frame of the real signal, a different one per example
+          each epoch (h10.convert_frames); windows also get a random crop start.
+          Nothing is added to the signal.
+  fixed   frame 0 only (the deterministic conversion)
+  random  the earlier synthetic augmentation (random rates, filters, gain, NSTDB noise);
+          kept for reference, not used
 """
 
 from __future__ import annotations
@@ -54,11 +60,13 @@ def shard_files(root: Path, sources: list[str], split: str) -> list[Path]:
     return [p for s in sources for p in sorted((root / s / split).glob("*.h5")) if shards.is_complete(p)]
 
 
-def make_transform(name: str, train: bool, noise: shards.Noise | None):
+def make_transform(name: str, conversion: str, noise: shards.Noise | None = None):
     kind = models.KIND[name]
 
-    def tf(x16, y, fs, rng):
-        if train:
+    def tf(x16, y, fs, rng, uid=None, epoch=0):
+        if conversion == "frames":
+            x = h10.convert_frames(x16, fs, kind, h10.frame_ids(uid, epoch, fs), rng)
+        elif conversion == "random":
             x = h10.convert(x16, fs, kind, rng)
             x, y = h10.augment(x, y, kind, rng, noise)
         else:
@@ -121,6 +129,13 @@ def validate(net, name: str, stream: shards.ChunkStream, max_chunks: int, bf16: 
     return {"score": float(np.mean(vals)) if vals else float("nan"), "se_at_fp1": res, "recall": rec, "n": int(len(y))}
 
 
+def _cpu_flags() -> str:
+    try:
+        return Path("/proc/cpuinfo").read_text()
+    except OSError:  # not Linux: no check
+        return "avx512_bf16"
+
+
 def save(path: Path, obj: dict) -> None:
     import torch
 
@@ -137,7 +152,7 @@ def main() -> None:
     ap.add_argument("--shards", type=Path, required=True)
     ap.add_argument("--run", type=Path, required=True)
     ap.add_argument("--sources", nargs="+", default=None)
-    ap.add_argument("--epochs", type=float, default=None, help="default: 3 (window models), 20 (beat)")
+    ap.add_argument("--epochs", type=float, default=None, help="default: 3 (window models), 10 (beat)")
     ap.add_argument("--hours", type=float, default=float(os.environ.get("TRAIN_HOURS", 23.5)))
     ap.add_argument("--ckpt-minutes", type=float, default=15.0)
     ap.add_argument("--val-minutes", type=float, default=60.0)
@@ -148,12 +163,16 @@ def main() -> None:
     ap.add_argument("--data-threads", type=int, default=None, help="default: threads // 6")
     ap.add_argument("--bf16", action="store_true", help="bfloat16 autocast (Zen 4 / AMX CPUs, or GPU)")
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--no-augment", action="store_true")
+    ap.add_argument("--conversion", choices=["frames", "fixed", "random"], default="frames")
+    ap.add_argument("--no-augment", action="store_true", help="same as --conversion fixed")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     t_start = time.time()
     args.run.mkdir(parents=True, exist_ok=True)
+    if args.bf16 and args.device == "cpu" and "avx512_bf16" not in _cpu_flags():
+        print("WARNING: --bf16 on a CPU without AVX-512 BF16 is emulated and ~35x slower "
+              "(submit_chain.sh constrains bf16 jobs to Zen 4 nodes)", file=sys.stderr, flush=True)
     if (args.run / "DONE").exists():
         print(f"{args.run}/DONE exists: nothing to do", file=sys.stderr)
         return
@@ -162,14 +181,16 @@ def main() -> None:
     torch.set_num_threads(max(args.threads - dthreads, 1))
     torch.manual_seed(args.seed)
     srcs = args.sources or DEFAULT_SOURCES[kind]
-    noise = None if args.no_augment else shards.Noise(args.shards / "noise" / "nstdb_noise.h5")
+    if args.no_augment:
+        args.conversion = "fixed"
+    noise = shards.Noise(args.shards / "noise" / "nstdb_noise.h5") if args.conversion == "random" else None
     batch = args.batch or BATCH[name]
     train_s = shards.ChunkStream(shard_files(args.shards, srcs, "train"), kind,
-                                 make_transform(name, not args.no_augment, noise), chunk=batch,
+                                 make_transform(name, args.conversion, noise), chunk=batch,
                                  seed=args.seed, threads=dthreads)
-    val_s = shards.ChunkStream(shard_files(args.shards, srcs, "val"), kind, make_transform(name, False, None),
+    val_s = shards.ChunkStream(shard_files(args.shards, srcs, "val"), kind, make_transform(name, "fixed"),
                                chunk=256, seed=12345, threads=dthreads)
-    epochs = args.epochs or (3 if kind == "win" else 20)
+    epochs = args.epochs or (3 if kind == "win" else 10)
     steps_per_epoch = len(train_s.index)
     total = max(int(math.ceil(epochs * steps_per_epoch)), 1)
 

@@ -1,0 +1,43 @@
+{
+ "cpu": "AMD EPYC 9654 96-Core Processor",
+ "threads": 48,
+ "torch": "2.14.1+cpu",
+ "models": {
+  "beat": {
+   "batch": 512,
+   "pipeline_ms_per_example_1thread": 0.0880535820328987,
+   "fp32": {
+    "s_per_step": 1.47811118500249,
+    "examples_per_s": 346.3880154584836
+   },
+   "bf16": {
+    "s_per_step": 4.417790841995156,
+    "examples_per_s": 115.89502950953904
+   }
+  },
+  "ecgfounder": {
+   "batch": 64,
+   "pipeline_ms_per_example_1thread": 1.2084504452900546,
+   "fp32": {
+    "s_per_step": 0.5647242060076678,
+    "examples_per_s": 113.32965599695049
+   },
+   "bf16": {
+    "s_per_step": 0.34947713700239547,
+    "examples_per_s": 183.1307207932212
+   }
+  },
+  "clef": {
+   "batch": 64,
+   "pipeline_ms_per_example_1thread": 0.42262512499746663,
+   "fp32": {
+    "s_per_step": 0.5534390840039123,
+    "examples_per_s": 115.64054988127218
+   },
+   "bf16": {
+    "s_per_step": 0.3553605830093147,
+    "examples_per_s": 180.0987590070518
+   }
+  }
+ }
+}

@@ -10,7 +10,7 @@ What gets trained, with the kit in [`finetune/`](finetune/README.md):
 |---|---|---|---|---|
 | 1 | **ECGFounder 1-lead** | MIT weights (HEEDB, 10 M ECGs) | 9 window targets on H10-like 130 Hz data | best AF and PVC/PAC window ranking in the benchmark, but never saw a strap or 130 Hz; weak on V runs |
 | 2 | **CLEF-Medium** | Zenodo weights (MIMIC-IV-ECG) | same 9 targets | single-lead by design; frozen + small head is weak here (see `benchmark/RESULTS.md`), so it needs real fine-tuning |
-| 3 | **heartKIT-style beat model** | scratch | N / S / V / **noise** per beat at 130 Hz | the benchmark's largest error is false V runs in noise; an explicit noise class plus H10-domain augmentation targets exactly that |
+| 3 | **heartKIT-style beat model** | scratch | N / S / V / **noise** per beat at 130 Hz | the benchmark's largest error is false V runs in noise; an explicit noise class, learned from real unreadable stretches on every 130 Hz frame, targets exactly that |
 
 The 9 window targets are the benchmark findings (`vt af svt pvc pac pause
 brady tachy`, `benchmark/findings.py`) plus `noise`. All three use a
@@ -69,42 +69,52 @@ Smaller databases keep up to 4,000 positive windows and 4,000 / 3,000 / 3,000 /
 1,000 beats per patient. That gives about 20 M training windows and 25 M
 training beats.
 
-### Augmentation: why the shards keep the source sampling rate
+### Conversion to 130 Hz: every frame, nothing added
 
 Each example is stored at its **source rate** (250 Hz Icentia11k, 500 Hz
-PTB-XL, 400 Hz CPSC2020, ...), as unfiltered int16 µV with a margin of 1 s
-(windows) or 0.75 s (beats). The 130 Hz H10-like signal is made when the
-example is read (`h10.convert`):
+PTB-XL, 400 Hz CPSC2020, 128 Hz LTAFDB, ...), as unfiltered int16 µV with a
+margin of 1 s (windows) or 0.75 s (beats). The 130 Hz H10-like signal is made
+when the example is read: polyphase resampling to 130 Hz, then the nominal
+H10-like front end (first-order 0.5 Hz high-pass, second-order 40 Hz low-pass,
+causal). The front end is an approximation of the strap, not a measurement of it.
 
-- **val / test**: polyphase to 130 Hz, then the nominal H10-like front end
-  (first-order 0.5 Hz high-pass, second-order 40 Hz low-pass, causal),
-  identical every time;
-- **train only**, a fresh draw every epoch:
-  - resampling: source → *r* Hz (*r* uniform in 125–135) → 130 Hz. Each stage
-    uses a random method (polyphase, FFT or linear interpolation), and the
-    second adds a random sub-sample phase;
-  - front end with random corners (high-pass 0.3–0.8 Hz, order 1–2; low-pass
-    30–45 Hz, order 1–3);
-  - crop shift (windows ±1 s, beats ±3 samples), gain ×0.6–1.6, polarity flip
-    (p 0.2), baseline wander (0.05–0.5 Hz, ≤ 0.5 mV);
-  - NSTDB electrode-motion, muscle or baseline noise at −6 to 24 dB (p 0.5).
-    Below −3 dB a window gets `noise = 1` and a *normal* beat becomes class
-    noise. V and S beats keep their class at any SNR, so the noise class can
-    never learn to hide an ectopic beat.
+**There is no single correct 130 Hz version of a recording.** The H10 samples
+the heart at moments unrelated to the beats, so the 130 Hz grid can sit at any
+sub-sample position relative to the source samples, and each position (a
+"frame") gives a slightly different 130 Hz signal. Starting the conversion *j*
+source samples later moves the grid by *j* x 130 / fs output samples. With
+130 / fs = p / q in lowest terms, *j* = 0 .. q−1 gives **every distinct frame
+exactly once**, with the same polyphase filter and no extra interpolation:
 
-Storing 2–3 fixed phase-shifted 130 Hz copies would give only 2–3 variants.
-The source-rate shards give a new variant every epoch for about 2× the space
-of 130 Hz shards (~80 GB instead of ~40 GB, LZF-compressed), with no extra
-files. Both easily fit the quota.
+| source rate | frames |
+|---|---:|
+| 128 Hz (LTAFDB) | 64 |
+| 200 Hz (SHDB-AF, CPSC2021) | 20 |
+| 250 Hz (Icentia11k, AFDB) | 25 |
+| 300 Hz (CinC 2017) | 30 |
+| 400 Hz (CPSC2020) | 40 |
+| 500 Hz (PTB-XL) | 50 |
 
-**Ablation (required before keeping augmentation).** Train the beat model twice
-for the same number of epochs, `beat_aug` and `beat_noaug` (`--no-augment`).
-Then compare them on the benchmark with `finetune/eval_beat.py`: held-out VT
-and PVC per-patient sensitivity (Wilson CI), PPV and false findings per day,
-with the same detector and the same tuning-set threshold rule as heartKIT.
-Keep augmentation only if it does not lower VT/PVC sensitivity and lowers
-false findings (or raises sensitivity). Section 7 explains why there is no
-local result yet.
+Training (`--conversion frames`, the default; `h10.convert_frames`): every
+epoch, each example is converted on a different frame (a fixed per-example
+start plus the epoch number, mod q), and each epoch uses all frames equally.
+Windows also get a random crop start (a different 10 s frame of the same real
+signal). Beats stay centred to within half a sample. **Nothing is added to the
+signal**: no gain, polarity, baseline, filter or rate changes and no synthetic
+noise. The noise class learns from the real unreadable stretches that the
+databases mark (Icentia11k `Q` beats, windows with mostly unreadable beats).
+Validation and test always use frame 0, which is exactly the deterministic
+conversion. Cost: 0.1 ms per beat and 0.4 ms per window on one thread.
+
+Frame 0 is as arbitrary as any other frame, so training on all frames was
+adopted by the owner's decision (2026-10-22) without an ablation.
+`--conversion fixed` (frame 0 only) remains available for a comparison.
+`--conversion random` is the earlier synthetic augmentation (random rates
+125–135 Hz and resampling methods, random filter corners, gain, polarity,
+baseline wander, NSTDB noise); it is kept in the code but not used.
+
+The source-rate shards give every frame at no extra space: storing q fixed
+130 Hz copies would multiply the space by q (25–64).
 
 ## 3. Jobs
 
@@ -155,6 +165,20 @@ unknown, so `--bf16` is opt-in.
   (they scaled at 84 % / 72 % to 4 threads) and 25–50 % for the small beat
   model (63 % already at 4 threads).
 
+**Measured on Euler (2026-10-22, AMD EPYC 9654, torch 2.14.1+cpu;
+`finetune/results/step_timing_euler*.md`), examples per second:**
+
+| model | 48 threads fp32 | 48 threads bf16 | 24 threads fp32 | 24 threads bf16 | used |
+|---|---:|---:|---:|---:|---|
+| beat | 346 | 116 | **875** | 955 | 24 CPUs, fp32 |
+| ECGFounder | 113 | 183 | 118 | **178** | 24 CPUs, bf16 |
+| CLEF-Medium | 116 | **180** | – | – | 24 CPUs, bf16 (24-thread speed assumed like ECGFounder) |
+
+The small beat model is 2.5x slower on 48 threads than on 24, and ECGFounder
+gains nothing beyond 24, so every training job asks for 24 CPUs. bf16 helps
+the two large models on Zen 4 (unlike the Xeon above). The estimates below
+were made before this measurement and are kept for reference.
+
 | model | 48-core estimate (range) | planning figure | per hour |
 |---|---:|---:|---:|
 | beat | 820–3,300 beats / s | **1,500 / s** | 5.4 M beats |
@@ -169,26 +193,21 @@ print examples/s every 5 minutes.
 windows and 2,450 beats per patient, 8 MB). About **20 M training windows** and
 **23.5 M training beats** per epoch.
 
-## 5. Wall-clock on Euler (CPU path)
+## 5. Wall-clock on Euler (CPU path, measured speeds)
 
-| step | compute | jobs | wall-clock incl. queue (10–30 min per 24 h job) |
+| step | compute (measured speed) | jobs | wall-clock |
 |---|---|---|---|
-| setup (`setup_euler.sh`) | – | login node | 15 min |
-| preprocessing, all sources | ~22 s of one core per Icentia11k patient (measured, incl. download) → ~70 core-hours | 375 array tasks, 8 cores, ≤ 4 at a time; ~1.1 TB downloaded through the ETH proxy | **~3 h to ~1 day**: ≥ 2.2 h compute-bound at 32 cores; the rest depends on proxy throughput (unmeasured: `pilot_prep.sh` measures it) |
-| beat model, 10 epochs (235 M beats) | 44 h (20–80 h) | 2 x 24 h (1–4) | **~2 days** |
-| beat ablation (`--no-augment`, same epochs) | same | 2 x 24 h, in parallel if the share allows two 48-core jobs | +0–2 days |
-| ECGFounder, **1 epoch** (20 M windows) | 56 h (32–90 h) | 3 x 24 h (2–4) | **~2.5 days** |
-| CLEF-Medium, 1 epoch | 56 h (31–85 h) | 3 x 24 h | **~2.5 days** |
-| ECGFounder or CLEF, 3 epochs | 167 h (96–270 h) | 7 x 24 h (4–12) | ~7 days each |
+| preprocessing, all sources | pilot: ~300 s per Icentia11k patient, download-bound (~2 s per file through the proxy) | 375 array tasks, 8 cores, 4 at a time, arrays one after another | **~1.5 days** (Icentia11k ~29 h) |
+| beat model, 10 epochs (~235 M beats, all frames) | 875 / s → **~75 h** | 4 x 24 h, 24 CPUs | ~3–3.5 days |
+| ECGFounder, 3 epochs (~60 M windows, bf16) | 178 / s → **~94 h** | 5 x 24 h, 24 CPUs | ~4–4.5 days |
+| CLEF-Medium, 3 epochs (bf16) | ~180 / s → **~93 h** | 5 x 24 h, 24 CPUs | ~4–4.5 days |
 
-On CPU alone, the realistic program is preprocessing, then the beat model (plus
-its ablation), then one epoch of each foundation model. That takes **about one
-week** if the three trainings run one after another, about 3 days if the
-guest share runs two or three 48-core jobs at once. Three epochs of each
-foundation model would take two weeks and collide with the 15-day purge of
-the shards (section 8). The window models already start from strong
-pre-trained weights, so one epoch of 20 M windows is a reasonable first
-fine-tune. The real gain over three epochs is what the GPU path buys.
+All three chains wait for the preprocessing (`AFTER=<last prep array>`) and
+then run side by side if the guest share allows three 24-CPU jobs at once:
+**about 6 days in all**. If they have to run one after another it is ~11 days
+after preprocessing, which comes close to the 15-day purge of the shards
+(section 8); the rented GPU (section 6) is then the way out for the two
+foundation models.
 
 The ≤ 4 h variant (`submit_chain.sh MODEL N 04:00:00`) needs 6x as many jobs
 and, at the observed ~10 h queue for short jobs, is slower in wall-clock. Use
@@ -247,6 +266,11 @@ pipeline-bound at ~10,000 beats/s with 8 data threads, 10 epochs in ~7 h,
 
 ### Recommendation
 
+*Superseded by the Euler measurement (section 4): with 24-CPU jobs and bf16,
+3 epochs of each foundation model take ~4 days on Euler, so all three models are
+trained on Euler first. The GPU path stays the fallback if the jobs cannot run
+side by side.* The original recommendation:
+
 **Use both: Euler for everything CPU-friendly, one rented RTX 4090 for the two
 foundation models.**
 
@@ -264,10 +288,10 @@ Expected total wall-clock: **about 3 days** (hybrid) versus **about 1 week**
 
 ## 7. Local augmentation ablation (small scale)
 
-**Not run.** A small local ablation was started in the cloud session that
-wrote this plan. It had not finished when the PR was merged, and no result was
-committed. The Euler ablation (`beat_aug` vs `beat_noaug`, section 2 and
-`finetune/README.md`) replaces it and is the one that decides.
+**Not run.** A small local ablation of the synthetic augmentation was started
+in the cloud session that wrote this plan; no result was committed. The
+synthetic augmentation is no longer used: training uses every 130 Hz frame of
+the real signal instead (section 2).
 
 ## 8. The 15-day purge
 

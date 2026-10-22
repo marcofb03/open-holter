@@ -148,3 +148,27 @@ def test_frames_cover_every_grid_position_and_frame0_is_deterministic():
     assert np.all(f1 == (f0 + 1) % q)
     counts = np.bincount(f0, minlength=q)
     assert counts.min() > 0.8 * counts.mean()
+
+
+def test_plateau_reduces_lr_then_stops_and_resumes():
+    import train
+
+    p = train.Plateau(lr_patience=2, stop_patience=5, min_delta=0.01)
+    acts = [p.step(s) for s in (0.5, 0.6, 0.605, 0.6, float("nan"), 0.59, 0.6)]
+    # 0.605 is not a gain > min_delta; NaN counts as no gain; LR is lowered every 2 misses, stop at 5
+    assert acts == ["improved", "improved", "wait", "reduce", "wait", "reduce", "stop"]
+    q = train.Plateau(2, 5, 0.01)
+    q.load(train.Plateau(2, 5, 0.01).state() | {"best": 0.6, "bad": 4, "since_reduce": 0, "reductions": 2})
+    assert q.step(0.7) == "improved" and q.bad == 0  # a real gain resets the patience
+
+
+def test_purge_deadline_from_oldest_shard(tmp_path):
+    import os
+    import train
+
+    a, b = tmp_path / "a.h5", tmp_path / "b.h5"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    os.utime(a, (1_000_000, 1_000_000))
+    assert train.purge_deadline([a, b], 14) == 1_000_000 + 14 * 86400
+    assert train.purge_deadline([a, b], 0) == float("inf") and train.purge_deadline([], 14) == float("inf")

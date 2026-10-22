@@ -7,8 +7,9 @@ Findings (reference from the databases' annotations; see datasets.py):
            (SHDB-AF also NOD) episode >= 30 s
     pvc    frequent PVCs: V beats >= 1 % of all beats of the patient
     pac    frequent PACs: S beats >= 1 % of all beats
-    pause  pause / asystole: an RR interval > 3 s between two readable beats, outside
-           annotated unreadable spans ('~' marks) and VF
+    pause  pause / asystole: an RR interval of 3-15 s between two readable beats, outside
+           annotated unreadable spans ('~' marks) and VF (a longer gap with no annotated
+           beat is unannotated signal loss: neither a reference pause nor a false finding)
     brady  HR < 40 bpm (8-beat running median) for >= 10 s
     tachy  HR > 150 bpm (8-beat running median) for >= 10 s, any rhythm
 
@@ -38,7 +39,7 @@ FINDINGS = ("vt", "af", "svt", "pvc", "pac", "pause", "brady", "tachy")
 BURDEN = {"pvc": "V", "pac": "S"}
 BURDEN_MIN = 0.01
 MIN_S = {"vt": 0.0, "af": 30.0, "svt": 30.0, "pause": 0.0, "brady": 10.0, "tachy": 10.0}
-PAUSE_S, PAUSE_OK_S = 3.0, 2.8
+PAUSE_S, PAUSE_OK_S, PAUSE_MAX_S = 3.0, 2.8, 15.0
 BRADY, BRADY_OK = 40.0, 45.0
 TACHY, TACHY_OK = 150.0, 140.0
 HR_BEATS = 8
@@ -158,7 +159,9 @@ def ref_findings(d: dict) -> dict:
         for a, b in vf:
             in_vf |= (bt >= a) & (bt <= b)
         hr = running_hr(bt, good & ~in_vf)
-        noise = _spans(rh, {"NOISE"})
+        # Gaps > 15 s without any annotated beat are unannotated signal loss in these Holter
+        # references (LTAFDB 113: 68-127 s gaps full of noisy detections), not asystole.
+        noise = _spans(rh, {"NOISE"}) + [p for p in pauses(bt, np.ones(len(bt), bool), PAUSE_MAX_S)]
         clean = lambda iv: [e for e in iv if not any(a - TOL <= e[1] and e[0] <= b + TOL for a, b in noise + vf)]  # noqa: E731
         p_ref = clean(pauses(bt, good, PAUSE_S))
         p_ok = pauses(bt, np.ones(len(bt), bool), PAUSE_OK_S) + noise  # unreadable: neither true nor false

@@ -377,9 +377,9 @@ def _num(v, default: float) -> float:
     return default if v is None or v != v else v
 
 
-def rank_key(s: dict, c: Cand, best_se: float) -> tuple:
+def rank_key(s: dict, c: Cand, best_se: float, target: float = TARGET) -> tuple:
     se = _num(s["Se"], 0.0)
-    cap = min(TARGET, best_se)
+    cap = min(target, best_se)
     return (-min(se, cap), _num(s["false_per_day"], np.inf), -_num(s["ep_Se"], 0.0), c.n_systems, len(c.parts))
 
 
@@ -425,6 +425,7 @@ def run(rows: list[dict]) -> dict:
         best_se = max((_num(s["Se"], 0.0) for _, s in scored), default=0.0)
         scored.sort(key=lambda x: rank_key(x[1], x[0], best_se))
         choice, st = scored[0]
+        strict, ss = min(scored, key=lambda x: rank_key(x[1], x[0], best_se, 1.0))  # target 100 %
         # best single system per family (same rule), for the "best system" table
         per_sys = {}
         for fam in NAMES:
@@ -442,6 +443,8 @@ def run(rows: list[dict]) -> dict:
         dflt = {fam: {"cand": Cand("atom", (a,)).label(), "held": ev.score(f, Cand("atom", (a,)), held),
                       "long": ev.score(f, Cand("atom", (a,)), long_)} for fam, a in defaults(f).items()}
         res = {"choice": choice.label(), "n_candidates": len(cands), "tune": st, "defaults": dflt,
+               "strict": {"choice": strict.label(), "tune": ss, "held": ev.score(f, strict, held),
+                          "long": ev.score(f, strict, long_)},
                "held": ev.score(f, choice, held), "long": ev.score(f, choice, long_),
                "noise": {snr: ev.score(f, choice, [i for i in noise if rows[i]["key"].endswith(snr)])
                          for snr in ds.NST_SNR},
@@ -485,6 +488,13 @@ def report(out: dict) -> str:
         t, h, lg = r["tune"], r["held"], r["long"]
         L.append(f"| {TITLE[f]} | {r['choice']} | {fmt(t['Se'], 1, True)} ({t['found']}/{t['pos']}) | {se_cell(h)} | "
                  f"{fmt(h['ep_Se'], 1, True)} | {fmt(h['PPV'], 2)} | {fmt(h['false_per_day'], 2)} | {fmt(lg['false_per_day'], 2)} |")
+    L += ["", "### Strict variant: target 100 % on tuning (then fewest false findings)", "",
+          "| finding | chosen on tuning data | tuning Se | held-out per-patient Se [95 % CI] | PPV | false / day (long recordings) |",
+          "|---|---|---:|---:|---:|---:|"]
+    for f, r in out["findings"].items():
+        t, h, lg = r["strict"]["tune"], r["strict"]["held"], r["strict"]["long"]
+        L.append(f"| {TITLE[f]} | {r['strict']['choice']} | {fmt(t['Se'], 1, True)} ({t['found']}/{t['pos']}) | "
+                 f"{se_cell(h)} | {fmt(h['PPV'], 2)} | {fmt(lg['false_per_day'], 2)} |")
     L += ["", "### Best single system per finding (held-out per-patient Se; false / day on long recordings)", "",
           "| finding | " + " | ".join(NAMES.values()) + " |", "|---|" + "---|" * len(NAMES)]
     for f, r in out["findings"].items():

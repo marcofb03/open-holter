@@ -17,7 +17,8 @@ data/work/bench2/clef_head/<db>/<rec>.npy (float16, windows x 8); the final
 head to weights/clef_head.pt (git-ignored), CV AUROC per target to
 ../benchmark/results/clef_head.json.
 
-    python head.py            # from ai/clef/, after ai/benchmark/frontend.py
+    python head.py                    # from ai/clef/, after ai/benchmark/frontend.py
+    python head.py --score-missing    # score held-out records cached later (same head)
 """
 
 from __future__ import annotations
@@ -114,10 +115,25 @@ def save(r: ds.Rec, p: np.ndarray) -> None:
     np.save(out, p.astype(np.float16))
 
 
+def score_missing() -> None:
+    """Score held-out / noise records processed after the head was trained (no retraining)."""
+    import torch
+
+    net = build()
+    net.load_state_dict(torch.load(HERE / "weights" / "clef_head.pt", map_location="cpu", weights_only=True))
+    net.eval()
+    for r in ds.records():
+        if r.split != "tune" and fe.cache_path(r).exists() and not (OUT / r.db / f"{r.rec}.npy").exists():
+            save(r, predict(net, fe.load(r, emb=True)["clef"]))
+            print(f"scored {r.key}", file=sys.stderr)
+
+
 def main() -> None:
     import torch
 
     torch.set_num_threads(4)
+    if "--score-missing" in sys.argv:
+        return score_missing()
     allrecs = [r for r in ds.records() if fe.cache_path(r).exists()]
     tune = [r for r in allrecs if r.split == "tune"]
     print(f"{len(tune)} tuning records of {len(allrecs)} processed", file=sys.stderr)

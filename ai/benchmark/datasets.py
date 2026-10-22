@@ -110,7 +110,10 @@ def _local_records(db: str) -> list[str]:
 
         fetch(db, out=d, aws_first=True)
     names = [r.strip() for r in (d / "RECORDS").read_text().split() if r.strip()]
-    return [r for r in names if (d / f"{r}.dat").exists()]
+    # a signal file, or a front-end cache (frontend.py --delete-raw removes the signal once cached);
+    # afdb 00735 / 03665 have neither (no signal on PhysioNet)
+    cached = DATA / "work" / "bench2" / db
+    return [r for r in names if (d / f"{r}.dat").exists() or (cached / f"{r}.pkl").exists()]
 
 
 NST_SNR = ("24", "18", "12", "06", "00", "_6")

@@ -25,7 +25,7 @@ brady tachy`) plus `noise`.
 | `prep.py` | one preprocessing array task → a few large HDF5 shards (idempotent) |
 | `shards.py` | shard writer, resumable chunk reader, NSTDB noise |
 | `models.py` | the three models and their input preprocessing |
-| `train.py` | resumable trainer: checkpoints every 15 min and on SIGUSR1, auto-resume, DONE marker |
+| `train.py` | resumable trainer until the validation score plateaus: best checkpoint, LR lowered on plateau, early stop, checkpoints every 15 min and on SIGUSR1, auto-resume, DONE with the reason |
 | `measure_step.py` | time one training step per model (CPU or GPU) |
 | `eval_beat.py` | a trained beat model on the benchmark, scored exactly like heartKIT (augmentation ablation) |
 | `slurm/` | `setup_euler.sh`, `pilot_prep.sh`, `submit_prep.sh` + `prep.sbatch`, `submit_chain.sh` + `train.sbatch`, `env.sh` |
@@ -50,17 +50,26 @@ a time with `DL_THREADS` (1) download per worker: 4 x 8 x 1 = 32 concurrent
 downloads. Raise them only after the pilot, and moderately.
 
 Training: all three models on every 130 Hz frame of the real signal
-(`--conversion frames`, the default; see the plan, section 2), 24 CPUs per job.
-`AFTER` makes the first job of each chain wait for the last preprocessing array.
-A finished run writes `DONE` and the remaining jobs of its chain exit in seconds.
+(`--conversion frames`, the default; see the plan, section 2), 24 CPUs per job,
+**until the validation score stops improving**: validation every quarter epoch on
+a fixed set of validation patients, `best.pt` kept at the best score, the learning
+rate lowered on a plateau, and a stop after a longer plateau (`train.py --help`).
+Caps: 25 epochs (beat) and 6 epochs (windows), and a stop 14 days after the oldest
+shard was written, before the 15-day scratch purge. `DONE` says why a run stopped;
+the remaining jobs of its chain then exit in seconds. `AFTER` makes the first job
+wait for the last preprocessing array.
 
 ```bash
-AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4                          # 10 epochs, ~75 h
-AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh ecgfounder 5 24:00:00 ecgfounder --bf16   # 3 epochs, ~94 h
-AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh clef 5 24:00:00 clef --bf16               # 3 epochs, ~93 h
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh beat 10                          # cap 25 epochs, ~9 days
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh ecgfounder 11 24:00:00 ecgfounder --bf16  # cap 6 epochs, ~10 days
+AFTER=<last prep array job id> bash $REPO/ai/finetune/slurm/submit_chain.sh clef 11 24:00:00 clef --bf16              # cap 6 epochs, ~10 days
 # afterwards, wherever the benchmark caches are (ai/benchmark/frontend.py):
 python eval_beat.py runs/beat                           # the beat model on the benchmark
 ```
+
+A run stopped by its cap or the purge deadline while still improving can continue
+on a rented GPU: copy the shards and the run folder, delete `DONE`, and resume with
+`--device cuda --purge-days 0` and a larger `--epochs`.
 
 Shards, runs and logs live in `/cluster/scratch/$USER/open-holter/`, which is
 purged after 15 days: copy `runs/*/best.pt` and the results off it (see the

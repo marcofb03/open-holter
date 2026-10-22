@@ -56,7 +56,7 @@ def load_xy(recs: list[ds.Rec]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     for i, r in enumerate(recs):
         d = fe.load(r, emb=True)
         t = F.window_targets(d)
-        xs.append(d["clef"])
+        xs.append(d["clef"].astype(np.float16))
         ys.append(np.stack([t[k] for k in F.HEAD_TARGETS], 1).astype(np.float32))
         gid.append(np.full(len(d["clef"]), i, np.int32))
     return np.concatenate(xs), np.concatenate(ys), np.concatenate(gid)
@@ -76,14 +76,14 @@ def train(x: np.ndarray, y: np.ndarray, seed: int = 0):
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=1e-4)
     steps = EPOCHS * (len(x) // BATCH + 1)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, LR, total_steps=steps)
-    xt = torch.from_numpy(x.astype(np.float32))
+    xt = torch.from_numpy(x)  # float16: converted batch by batch (keeps memory at ~1 GB)
     yt = torch.from_numpy(np.nan_to_num(y))
     mt = torch.from_numpy(m.astype(np.float32))
     net.train()
     for _ in range(EPOCHS):
         for b in np.array_split(rng.permutation(len(x)), max(len(x) // BATCH, 1)):
             b = torch.from_numpy(b)
-            loss = (lossf(net(xt[b]), yt[b]) * mt[b]).sum() / mt[b].sum().clamp(min=1)
+            loss = (lossf(net(xt[b].float()), yt[b]) * mt[b]).sum() / mt[b].sum().clamp(min=1)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -94,8 +94,11 @@ def train(x: np.ndarray, y: np.ndarray, seed: int = 0):
 def predict(net, x: np.ndarray) -> np.ndarray:
     import torch
 
+    out = []
     with torch.inference_mode():
-        return torch.sigmoid(net(torch.from_numpy(x.astype(np.float32)))).numpy()
+        for i in range(0, len(x), 65536):
+            out.append(torch.sigmoid(net(torch.from_numpy(x[i:i + 65536].astype(np.float32)))).numpy())
+    return np.concatenate(out) if out else np.zeros((0, K), np.float32)
 
 
 def auroc(y: np.ndarray, s: np.ndarray) -> float:

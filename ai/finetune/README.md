@@ -28,23 +28,34 @@ brady tachy`) plus `noise`.
 | `train.py` | resumable trainer: checkpoints every 15 min and on SIGUSR1, auto-resume, DONE marker |
 | `measure_step.py` | time one training step per model (CPU or GPU) |
 | `eval_beat.py` | a trained beat model on the benchmark, scored exactly like heartKIT (augmentation ablation) |
-| `slurm/` | `setup_euler.sh`, `submit_prep.sh` + `prep.sbatch`, `submit_chain.sh` + `train.sbatch`, `env.sh` |
+| `slurm/` | `setup_euler.sh`, `pilot_prep.sh`, `submit_prep.sh` + `prep.sbatch`, `submit_chain.sh` + `train.sbatch`, `env.sh` |
 
-## Euler in five commands
+## Euler, step by step
 
 ```bash
 git clone https://github.com/marcofb03/open-holter ~/open-holter
 bash ~/open-holter/ai/finetune/slurm/setup_euler.sh          # venv, CPU torch, weights (~10 min)
 cd /cluster/scratch/$USER/open-holter
-bash ~/open-holter/ai/finetune/slurm/submit_prep.sh           # all preprocessing arrays
-bash ~/open-holter/ai/finetune/slurm/submit_chain.sh beat 2   # 2 x 24 h, resumes by itself
+REPO=~/open-holter
+bash $REPO/ai/finetune/slurm/pilot_prep.sh                    # 1 task, 8 patients -> pilot/ (proxy check)
+sbatch $REPO/ai/finetune/slurm/measure_euler.sbatch           # 10 min: real step times on 48 cores
+bash $REPO/ai/finetune/slurm/submit_prep.sh                   # all arrays, one after another, <= 32 downloads
+python $REPO/ai/finetune/prep.py manifest --out shards        # when all prep jobs are done
 ```
 
-Ablation of the augmentation (same number of epochs, then compare on the benchmark):
+Compute nodes reach the internet only through the ETH proxy (`module load
+eth_proxy`, in `env.sh`). It is shared by every Euler user and blocks a site
+for everyone if overused, so `submit_prep.sh` runs at most `PAR` (4) tasks at
+a time with `DL_THREADS` (1) download per worker: 4 x 8 x 1 = 32 concurrent
+downloads. Raise them only after the pilot, and moderately.
+
+Beat model, trained twice for the augmentation ablation (same epochs; chains of
+4 x 24 h, because 10 epochs are estimated at 20–80 h; a finished run writes
+`DONE` and the remaining jobs exit in seconds):
 
 ```bash
-bash ~/open-holter/ai/finetune/slurm/submit_chain.sh beat 2 24:00:00 beat_aug
-bash ~/open-holter/ai/finetune/slurm/submit_chain.sh beat 2 24:00:00 beat_noaug --no-augment
+bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4 24:00:00 beat_aug
+bash $REPO/ai/finetune/slurm/submit_chain.sh beat 4 24:00:00 beat_noaug --no-augment
 # afterwards, wherever the benchmark caches are (ai/benchmark/frontend.py):
 python eval_beat.py runs/beat_aug runs/beat_noaug       # -> results/ablation.md
 ```

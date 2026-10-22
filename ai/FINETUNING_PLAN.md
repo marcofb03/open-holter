@@ -28,6 +28,7 @@ rate** on the validation patients, not the best accuracy.
 | node | AMD EPYC 9654 (Zen 4, AVX-512 incl. BF16; no AMX), 48 cores allocated | timings below are extrapolated to it |
 | scratch | `/cluster/scratch/mfiorani/open-holter/`, ~2.1 TB free of 2.5 TB, **≤ 1,000,000 files**, files **purged after 15 days** | few large shards; copy results off (section 8) |
 | Icentia11k | 11,000 patients x 151 files = 1.66 M files, 1.1 TB | never stored raw: streamed patient by patient through node-local `$TMPDIR` |
+| internet from jobs | compute nodes reach outside ETH **only via `module load eth_proxy`**; the proxy has limited capacity, and overuse blocks the external site for all Euler users ([docs](https://docs.hpc.ethz.ch/connections/firewall/#eth-proxy), checked 2026-10-22) | `env.sh` loads `eth_proxy`; downloads are throttled to ≤ 32 at a time and the arrays run one after another (section 3) |
 | also | Contabo VPS (8 vCPU, 23 GB, ~170 GB free), up to ~USD 50 of rented GPU | the VPS receives the results; the GPU path is section 6 |
 
 ## 2. Data: from 1.7 M raw files to ~1,100 shards
@@ -102,14 +103,14 @@ Then compare them on the benchmark with `finetune/eval_beat.py`: held-out VT
 and PVC per-patient sensitivity (Wilson CI), PPV and false findings per day,
 with the same detector and the same tuning-set threshold rule as heartKIT.
 Keep augmentation only if it does not lower VT/PVC sensitivity and lowers
-false findings (or raises sensitivity). A small local version of this ablation
-is in section 7.
+false findings (or raises sensitivity). Section 7 explains why there is no
+local result yet.
 
 ## 3. Jobs
 
 | job | script | resources | time | count |
 |---|---|---|---|---|
-| preprocessing | `slurm/submit_prep.sh` → `prep.sbatch` (array) | 8 CPUs x 3 GB, `--tmp=40G` | ≤ 4 h per task (measured: ~16 s of one core per Icentia11k patient, so ~10 min per 37-patient task on 8 cores) | 375 tasks, ≤ 40 at a time for Icentia11k |
+| preprocessing | `slurm/submit_prep.sh` → `prep.sbatch` (array) | 8 CPUs x 3 GB, `--tmp=40G` | ≤ 4 h per task (measured: ~16 s of one core per Icentia11k patient, so ~10 min per 37-patient task on 8 cores) | 375 tasks; the arrays run one after another, ≤ 4 tasks at a time (`PAR`), 1 download thread per worker (`DL_THREADS`): ≤ 32 concurrent downloads through the ETH proxy |
 | training | `slurm/submit_chain.sh MODEL N [TIME]` → `train.sbatch` | 48 CPUs x 2 GB | 24 h (default) or 4 h | N dependent jobs per model |
 
 Training jobs are **resumable by construction**:
@@ -173,7 +174,7 @@ windows and 2,450 beats per patient, 8 MB). About **20 M training windows** and
 | step | compute | jobs | wall-clock incl. queue (10–30 min per 24 h job) |
 |---|---|---|---|
 | setup (`setup_euler.sh`) | – | login node | 15 min |
-| preprocessing, all sources | ~22 s of one core per Icentia11k patient (measured, incl. download) → ~70 core-hours | 375 array tasks, 8 cores, ~5–10 min each, ≤ 40 at a time | **1–3 h** |
+| preprocessing, all sources | ~22 s of one core per Icentia11k patient (measured, incl. download) → ~70 core-hours | 375 array tasks, 8 cores, ≤ 4 at a time; ~1.1 TB downloaded through the ETH proxy | **~3 h to ~1 day**: ≥ 2.2 h compute-bound at 32 cores; the rest depends on proxy throughput (unmeasured: `pilot_prep.sh` measures it) |
 | beat model, 10 epochs (235 M beats) | 44 h (20–80 h) | 2 x 24 h (1–4) | **~2 days** |
 | beat ablation (`--no-augment`, same epochs) | same | 2 x 24 h, in parallel if the share allows two 48-core jobs | +0–2 days |
 | ECGFounder, **1 epoch** (20 M windows) | 56 h (32–90 h) | 3 x 24 h (2–4) | **~2.5 days** |
@@ -249,7 +250,7 @@ pipeline-bound at ~10,000 beats/s with 8 data threads, 10 epochs in ~7 h,
 **Use both: Euler for everything CPU-friendly, one rented RTX 4090 for the two
 foundation models.**
 
-1. **Euler** (free): preprocessing (1–3 h). Then the beat model and its
+1. **Euler** (free): preprocessing (~3 h to ~1 day, see section 5). Then the beat model and its
    augmentation ablation (2 x ~2 days in parallel). These are small models,
    and the ablation needs two full runs anyway.
 2. **RTX 4090 on RunPod Community or Vast.ai** (~USD 10–20, ~1 day): ECGFounder and CLEF,
@@ -263,7 +264,10 @@ Expected total wall-clock: **about 3 days** (hybrid) versus **about 1 week**
 
 ## 7. Local augmentation ablation (small scale)
 
-ABLATION_PENDING
+**Not run.** A small local ablation was started in the cloud session that
+wrote this plan. It had not finished when the PR was merged, and no result was
+committed. The Euler ablation (`beat_aug` vs `beat_noaug`, section 2 and
+`finetune/README.md`) replaces it and is the one that decides.
 
 ## 8. The 15-day purge
 

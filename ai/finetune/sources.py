@@ -26,6 +26,7 @@ import ast
 import csv
 import hashlib
 import io
+import os
 import shutil
 import sys
 import urllib.error
@@ -125,7 +126,9 @@ def read_patient(source: str, patient: str, payload, tmp: Path) -> list[tuple[st
                         raise
                     print(f"  {patient}/{s}: missing on the server, skipped", file=sys.stderr)
                     return None
-            with ThreadPoolExecutor(8) as ex:
+            # Parallel segment downloads per patient. On Euler every download goes through the shared
+            # ETH proxy, so prep.sbatch keeps this low (OH_DL_THREADS, set by prep.py --dl-threads).
+            with ThreadPoolExecutor(int(os.environ.get("OH_DL_THREADS", 8))) as ex:
                 ok = [s for s in ex.map(get, names) if s]
             return [_wfdb("icentia11k", d / patient / s) for s in ok]
         if source in BENCH_DBS:
@@ -158,6 +161,8 @@ def read_patient(source: str, patient: str, payload, tmp: Path) -> list[tuple[st
             return [cpsc2020_record(patient, tmp)]
         raise ValueError(source)
     finally:
+        mb = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) / 1e6 if d.exists() else 0.0
+        print(f"  {source}/{patient}: {mb:.0f} MB raw", file=sys.stderr, flush=True)  # proxy throughput
         shutil.rmtree(d, ignore_errors=True)  # raw files never outlive their patient
 
 

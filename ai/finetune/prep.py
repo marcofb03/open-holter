@@ -47,28 +47,30 @@ def shard_path(out: Path, source: str, split: str, i: int, n: int) -> Path:
     return out / source / split / f"task-{i:04d}-of-{n:04d}.h5"
 
 
-def one_patient(args: tuple) -> tuple[str, str, dict | None, float]:
+def one_patient(args: tuple) -> tuple[str, str, dict | None, float, float]:
     source, pid, split, payload, tmp, seed = args
     t0 = time.perf_counter()
     rng = np.random.default_rng(int(hashlib.sha256(f"{seed}:{source}:{pid}".encode()).hexdigest(), 16) % 2**32)
     budget = BUDGET.get(source, BUDGET["default"])
     parts, rates = [], set()
     try:
-        for ns, x16, fs, ref in sources.read_patient(source, pid, payload, Path(tmp)):
+        recs = sources.read_patient(source, pid, payload, Path(tmp))
+        t_read = time.perf_counter() - t0
+        for ns, x16, fs, ref in recs:
             rates.add(float(fs))
             ex = h10.examples(ns, x16, fs, ref)
             ex["win_y"] = sources.labels_override(ns, ref, ex["win_y"])
             parts.append(ex)
     except Exception as e:  # noqa: BLE001 - one bad patient must not kill a 4 h task
         print(f"  {source}/{pid}: FAILED {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        return pid, split, None, time.perf_counter() - t0
+        return pid, split, None, time.perf_counter() - t0, 0.0
     if not parts:
-        return pid, split, None, time.perf_counter() - t0
+        return pid, split, None, time.perf_counter() - t0, t_read
     if len(rates) != 1:
         raise ValueError(f"{source}/{pid}: mixed sampling rates {rates}")
     ex = h10.apply_budget(shards.concat(parts), rng, budget)
     ex["fs"] = rates.pop()
-    return pid, split, ex, time.perf_counter() - t0
+    return pid, split, ex, time.perf_counter() - t0, t_read
 
 
 def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, policy: str, limit: int | None) -> None:
@@ -86,7 +88,7 @@ def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, po
     t0 = time.perf_counter()
     fs = None
     with ProcessPoolExecutor(workers) as ex:
-        for pid, split, e, sec in ex.map(one_patient, jobs):
+        for pid, split, e, sec, sec_read in ex.map(one_patient, jobs):
             if e is None:
                 continue
             fs_p = e.pop("fs")
@@ -98,7 +100,8 @@ def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, po
             e["beat_pid"] = np.full(len(e["beat_y"]), k, np.int32)
             acc[split].append(e)
             pids[split].append(pid)
-            print(f"  {pid} [{split}] {len(e['win_y'])} windows {len(e['beat_y'])} beats {sec:.0f} s", file=sys.stderr,
+            print(f"  {pid} [{split}] {len(e['win_y'])} windows {len(e['beat_y'])} beats {sec:.0f} s "
+                  f"(download + read {sec_read:.0f} s)", file=sys.stderr,
                   flush=True)
     L = {k: int(round((h10.OUT_LEN[k] / h10.FS + 2 * h10.MARGIN_S[k]) * (fs or h10.FS))) for k in ("win", "beat")}
     empty = {"win_x": np.zeros((0, L["win"]), np.int16), "win_y": np.zeros((0, len(h10.WINDOW_TARGETS)), np.int8),
@@ -142,9 +145,12 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--tmp", type=Path, default=Path(os.environ.get("TMPDIR", "/tmp")))
     ap.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)))
+    ap.add_argument("--dl-threads", type=int, default=int(os.environ.get("OH_DL_THREADS", 8)),
+                    help="parallel downloads per worker (Euler: total = tasks x workers x this, via the ETH proxy)")
     ap.add_argument("--policy", choices=["benchmark", "all"], default="benchmark")
     ap.add_argument("--limit", type=int, default=None, help="patients per task (testing)")
     args = ap.parse_args()
+    os.environ["OH_DL_THREADS"] = str(args.dl_threads)  # read by sources.read_patient in the workers
     if args.source == "manifest":
         return manifest(args.out)
     if args.source == "noise":

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import hashlib
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -168,9 +167,9 @@ def fetch_icentia(rec: str, out: Path | None = None) -> Path:
         if dst.exists() and dst.stat().st_size:
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        url = f"{ICENTIA_URL}{p[:3]}/{rec}{e}"
-        with urllib.request.urlopen(url, timeout=300) as resp:
-            data = resp.read()
+        from fetch_physionet import _get  # retries with backoff on cut transfers
+
+        data = _get(f"{ICENTIA_URL}{p[:3]}/{rec}{e}", timeout=300)
         tmp = dst.with_suffix(e + ".part")
         tmp.write_bytes(data)
         tmp.rename(dst)

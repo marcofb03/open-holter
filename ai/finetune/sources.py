@@ -28,6 +28,7 @@ import hashlib
 import io
 import shutil
 import sys
+import urllib.error
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -114,9 +115,19 @@ def read_patient(source: str, patient: str, payload, tmp: Path) -> list[tuple[st
     try:
         if source == "icentia11k":
             names = _get(f"{bds.ICENTIA_URL}{patient[:3]}/{patient}/RECORDS").decode().split()
+
+            def get(s):  # a few segments lack a file on the server (e.g. p00008): skip those
+                try:
+                    bds.fetch_icentia(f"{patient}/{s}", out=d)
+                    return s
+                except urllib.error.HTTPError as err:
+                    if err.code != 404:
+                        raise
+                    print(f"  {patient}/{s}: missing on the server, skipped", file=sys.stderr)
+                    return None
             with ThreadPoolExecutor(8) as ex:
-                list(ex.map(lambda s: bds.fetch_icentia(f"{patient}/{s}", out=d), names))
-            return [_wfdb("icentia11k", d / patient / s) for s in names]
+                ok = [s for s in ex.map(get, names) if s]
+            return [_wfdb("icentia11k", d / patient / s) for s in ok]
         if source in BENCH_DBS:
             out = []
             for r in payload:

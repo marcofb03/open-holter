@@ -1,0 +1,43 @@
+{
+ "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+ "threads": 1,
+ "torch": "2.14.1+cpu",
+ "models": {
+  "beat": {
+   "batch": 512,
+   "pipeline_ms_per_example_1thread": 0.11398712109667031,
+   "fp32": {
+    "s_per_step": 4.497292121999635,
+    "examples_per_s": 113.84628485559638
+   },
+   "bf16": {
+    "s_per_step": 4.201576628998737,
+    "examples_per_s": 121.8590175093422
+   }
+  },
+  "ecgfounder": {
+   "batch": 64,
+   "pipeline_ms_per_example_1thread": 1.5638960390731427,
+   "fp32": {
+    "s_per_step": 14.945271734999551,
+    "examples_per_s": 4.282290823131823
+   },
+   "bf16": {
+    "s_per_step": 24.855430571002216,
+    "examples_per_s": 2.5748900151690033
+   }
+  },
+  "clef": {
+   "batch": 64,
+   "pipeline_ms_per_example_1thread": 1.170409757818902,
+   "fp32": {
+    "s_per_step": 14.368839914001,
+    "examples_per_s": 4.4540826109168625
+   },
+   "bf16": {
+    "s_per_step": 24.83462370399866,
+    "examples_per_s": 2.577047301493651
+   }
+  }
+ }
+}

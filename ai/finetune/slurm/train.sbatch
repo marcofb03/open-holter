@@ -13,4 +13,6 @@ source "${REPO:-$HOME/open-holter}/ai/finetune/slurm/env.sh"
 LIMIT_MIN=$(squeue -h -j "$SLURM_JOB_ID" -o %l | awk -F'[-:]' '{ if (NF==4) print $1*1440+$2*60+$3; else if (NF==3) print $1*60+$2; else print $1 }')
 export TRAIN_HOURS=$(python -c "print(max(($LIMIT_MIN - 15) / 60, 0.1))")
 exec python "$REPO/ai/finetune/train.py" --model "$MODEL" --shards "$SHARDS" --run "$RUNS/$RUN" \
-    --threads "$SLURM_CPUS_PER_TASK" --bf16 ${TRAIN_ARGS:-}
+    --threads "$SLURM_CPUS_PER_TASK" ${TRAIN_ARGS:-}
+# bf16 is opt-in (TRAIN_ARGS="--bf16"): it slowed the 30 M-parameter models on the CPU we measured;
+# check with measure_step.py on a 48-core node first (FINETUNING_PLAN.md section 4).

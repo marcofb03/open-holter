@@ -126,15 +126,140 @@ Training jobs are **resumable by construction**:
 
 ## 4. How long: measured here, extrapolated to 48 Zen 4 cores
 
-MEASUREMENTS_PENDING
+Measured in this cloud container: Intel Xeon @ 2.8 GHz (Sapphire Rapids
+class, AMX), 4 vCPUs, torch 2.14 CPU. Each figure is one full training step
+(forward, backward, AdamW update), median of 3–5 steps after warm-up, from
+`finetune/measure_step.py`. Raw numbers are in `finetune/results/step_timing_local*.md`.
+
+| model | batch | 1 thread | 2 threads | 4 threads | scaling 1→4 | bf16 (4 threads) | data pipeline, 1 thread |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| beat (0.43 M) | 512 beats | 114 /s | 178 /s | 285 /s | 63 % | 327 /s | 0.09 ms / beat |
+| ECGFounder (30.8 M) | 64 windows | 4.3 /s | 7.4 /s | 14.5 /s | 84 % | 8.6 /s (slower) | 1.45 ms / window |
+| CLEF-Medium (30.7 M) | 64 windows | 4.5 /s | 8.1 /s | 13.0 /s | 72 % | 8.0 /s (slower) | 1.22 ms / window |
+
+The data pipeline (resampling chain, front end, augmentation, model
+preprocessing) is < 1.5 ms per example on one thread. At the training rates
+below it needs less than half a core, so the GPU or the convolutions are always
+the bottleneck, never the shards. bf16 autocast *slowed* the two large models
+here (backward pass). On Zen 4, which has AVX-512 BF16 but no AMX, it is
+unknown, so `--bf16` is opt-in.
+
+**Extrapolation to one Euler job: 48 cores of an AMD EPYC 9654.**
+
+- Per core, Zen 4 has half the FMA width of this Xeon (512-bit ops
+  double-pumped on 256-bit units) but runs at higher all-core clocks. This
+  container's vCPUs may also be hyperthreads. I assume a per-thread speed of
+  0.6–1.2x the measurement above.
+- Parallel efficiency from 4 to 48 threads: 50–70 % for the 30 M models
+  (they scaled at 84 % / 72 % to 4 threads) and 25–50 % for the small beat
+  model (63 % already at 4 threads).
+
+| model | 48-core estimate (range) | planning figure | per hour |
+|---|---:|---:|---:|
+| beat | 820–3,300 beats / s | **1,500 / s** | 5.4 M beats |
+| ECGFounder | 62–173 windows / s | **100 / s** | 0.36 M windows |
+| CLEF-Medium | 65–180 windows / s | **100 / s** | 0.36 M windows |
+
+Replace these estimates with real ones in 10 minutes:
+`sbatch $REPO/ai/finetune/slurm/measure_euler.sbatch`. The training logs also
+print examples/s every 5 minutes.
+
+**Epoch sizes** come from the measured shards (115 Icentia11k patients: 2,075
+windows and 2,450 beats per patient, 8 MB). About **20 M training windows** and
+**23.5 M training beats** per epoch.
 
 ## 5. Wall-clock on Euler (CPU path)
 
-WALLCLOCK_PENDING
+| step | compute | jobs | wall-clock incl. queue (10–30 min per 24 h job) |
+|---|---|---|---|
+| setup (`setup_euler.sh`) | – | login node | 15 min |
+| preprocessing, all sources | ~22 s of one core per Icentia11k patient (measured, incl. download) → ~70 core-hours | 375 array tasks, 8 cores, ~5–10 min each, ≤ 40 at a time | **1–3 h** |
+| beat model, 10 epochs (235 M beats) | 44 h (20–80 h) | 2 x 24 h (1–4) | **~2 days** |
+| beat ablation (`--no-augment`, same epochs) | same | 2 x 24 h, in parallel if the share allows two 48-core jobs | +0–2 days |
+| ECGFounder, **1 epoch** (20 M windows) | 56 h (32–90 h) | 3 x 24 h (2–4) | **~2.5 days** |
+| CLEF-Medium, 1 epoch | 56 h (31–85 h) | 3 x 24 h | **~2.5 days** |
+| ECGFounder or CLEF, 3 epochs | 167 h (96–270 h) | 7 x 24 h (4–12) | ~7 days each |
+
+On CPU alone, the realistic program is preprocessing, then the beat model (plus
+its ablation), then one epoch of each foundation model. That takes **about one
+week** if the three trainings run one after another, about 3 days if the
+guest share runs two or three 48-core jobs at once. Three epochs of each
+foundation model would take two weeks and collide with the 15-day purge of
+the shards (section 8). The window models already start from strong
+pre-trained weights, so one epoch of 20 M windows is a reasonable first
+fine-tune. The real gain over three epochs is what the GPU path buys.
+
+The ≤ 4 h variant (`submit_chain.sh MODEL N 04:00:00`) needs 6x as many jobs
+and, at the observed ~10 h queue for short jobs, is slower in wall-clock. Use
+it only if 24 h jobs stop starting promptly.
 
 ## 6. Rented-GPU path (RunPod or Vast.ai)
 
-GPU_PENDING
+Copy **only the shards** (~85 GB, `shards/` with `manifest.json`) to the
+rented machine. Run the same `train.py` with `--device cuda --bf16
+--data-threads 8`. Nothing else moves: no raw data, no Icentia11k download.
+
+```bash
+# on the pod (RunPod "PyTorch" template or Vast.ai), once:
+git clone https://github.com/marcofb03/open-holter && cd open-holter/ai
+pip install numpy scipy pandas wfdb scikit-learn h5py bottleneck
+(cd ecgfounder && python download_weights.py) && (cd clef && python download_weights.py)
+# from an Euler login node (or via the VPS if outbound SSH to the pod is blocked):
+rsync -av --progress /cluster/scratch/mfiorani/open-holter/shards/ root@POD:/workspace/shards/ -e "ssh -p PORT"
+# on the pod: calibrate (2 min), then train
+python finetune/measure_step.py --device cuda --tag gpu
+python finetune/train.py --model ecgfounder --shards /workspace/shards --run /workspace/runs/ecgfounder \
+    --device cuda --bf16 --data-threads 8 --epochs 3
+python finetune/train.py --model clef --shards /workspace/shards --run /workspace/runs/clef \
+    --device cuda --bf16 --data-threads 8 --epochs 3
+```
+
+Put the shards and runs on a network volume, so a preempted or restarted pod
+resumes from `last.pt` (checkpoints every 15 min) without copying again.
+
+**Throughput is an estimate here: no GPU was available to measure.**
+
+- ECGFounder costs 2.3 GFLOP per window forward, about 6.8 GFLOP per training
+  example.
+- Its grouped 1-D convolutions use tensor cores poorly, so I assume 5–15 %
+  of peak bf16.
+- That gives an RTX 4090 1,000–3,000 windows/s. The planning figure is
+  **1,500 /s**: 3 epochs (60 M windows) in **~11 h per model**.
+- `measure_step.py --device cuda` gives the real figure in the first two
+  minutes. If it is lower than planned, the table below still has room under
+  USD 50.
+
+| GPU (RunPod Community, 2026-10-22) | USD / h | planning windows / s | ECGFounder + CLEF, 3 epochs each | GPU cost | + setup, copy, calibration (3 h) | storage (150 GB, 3 days) | **total** | at half the planned speed |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **RTX 4090** | 0.34 | 1,500 | 22 h | 7.5 | 1.0 | 1.0 | **~10** | ~18 |
+| L40S | 0.79 | 2,000 | 17 h | 13 | 2.4 | 1.0 | ~17 | ~30 |
+| A100 80 GB (PCIe / SXM) | 1.19 / 1.39 | 2,500 | 13 h | 16–19 | 3.6–4.2 | 1.0 | ~21–24 | ~36–42 |
+| H100 SXM | 2.69 | 4,500 | 7.5 h | 20 | 8.1 | 1.0 | ~29 | ~49 |
+
+Prices are from runpod.io/pricing on 2026-10-22: Community Cloud, on demand;
+network storage USD 0.07/GB-month. Vast.ai lists the RTX 4090 at about
+USD 0.30/h on demand and USD 0.15/h interruptible (aggregators,
+September 2026); `train.py` resumes after an interruption, so interruptible
+instances are fine. The beat model can also run on the GPU: it is
+pipeline-bound at ~10,000 beats/s with 8 data threads, 10 epochs in ~7 h,
++USD 2.4 on a 4090. On Euler it is free.
+
+### Recommendation
+
+**Use both: Euler for everything CPU-friendly, one rented RTX 4090 for the two
+foundation models.**
+
+1. **Euler** (free): preprocessing (1–3 h). Then the beat model and its
+   augmentation ablation (2 x ~2 days in parallel). These are small models,
+   and the ablation needs two full runs anyway.
+2. **RTX 4090 on RunPod Community or Vast.ai** (~USD 10–20, ~1 day): ECGFounder and CLEF,
+   3 epochs each, copying only the shards. On Euler the same work takes about 2
+   weeks and collides with the 15-day purge.
+3. **Fallback without the GPU budget:** one epoch of each foundation model on
+   Euler (~2.5 days each), queued right after the beat model.
+
+Expected total wall-clock: **about 3 days** (hybrid) versus **about 1 week**
+(Euler only, 1 epoch per foundation model) or 2+ weeks (Euler only, 3 epochs).
 
 ## 7. Local augmentation ablation (small scale)
 

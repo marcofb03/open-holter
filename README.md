@@ -38,9 +38,11 @@ single-lead ECG at 130 Hz; with a dedicated phone it can record for weeks.
    computer today and will move onto the phone.
 3. **Review.** The report shows the **raw** ECG strip of every event, so a
    cardiologist can confirm or dismiss it quickly.
-4. **AI (in progress).** Open models (ECGFounder, heartKIT) are being benchmarked
-   against the rules on public cardiologist-annotated databases to pick a
-   second reader for the phone.
+4. **AI (in progress).** Open models (ECGFounder, heartKIT, CLEF) are
+   benchmarked against the rules on public cardiologist-annotated databases.
+   A sensitivity-first router picks, per finding, the system or combination
+   that misses the fewest patients. A fine-tuning kit for the ETH Euler
+   cluster adapts the models to H10-like signals.
 
 ### Repository map
 
@@ -50,7 +52,8 @@ single-lead ECG at 130 Hz; with a dedicated phone it can record for weeks.
 | `analysis/ecgpipe/` | Python analysis: loading, beat detection and labels, events, confidence, HTML report. |
 | `analysis/tests/`, `analysis/tools/` | Synthetic tests (run in CI) and validation on PhysioNet databases. |
 | `analysis/VALIDATION.md` | Accuracy on held-out data, including where it is weak. |
-| `ai/` | Open AI second readers (ECGFounder, heartKIT) and the cross-system benchmark; results in `ai/benchmark/RESULTS.md`. |
+| `ai/` | Open AI second readers (ECGFounder, heartKIT, CLEF) and the cross-system benchmark with the sensitivity-first router; results in `ai/benchmark/RESULTS.md`. |
+| `ai/finetune/`, `ai/FINETUNING_PLAN.md` | Fine-tuning kit (Icentia11k and seven other sources → H10-like shards, resumable Slurm training) and the plan for Euler CPU or a rented GPU. |
 | `.github/workflows/` | Automatic checks: analysis tests, AI tests and Android build. |
 | `data/`, `reports/` | Local only, never committed: your recordings, downloaded datasets, generated reports. |
 
@@ -63,8 +66,8 @@ parts; they are documented in [android/README.md](android/README.md#files-and-fo
 |---|---|
 | `analysis/` – Python analysis of ECGLogger CSV files | rule-based v2, validated on held-out MIT-BIH DS2, SVDB and INCART, see [analysis/VALIDATION.md](analysis/VALIDATION.md) |
 | `android/` – recorder app (Kotlin + Polar BLE SDK) | first version, APK built by CI; not yet tested on a real phone, see [android/README.md](android/README.md) |
-| AI second readers – `ai/` (open ECGFounder 1-lead, Ambiq heartKIT) | evaluated on held-out MIT-BIH DS2, SVDB and INCART at 130 Hz; recommended combination: rules + heartKIT beat/AF models, ECGFounder on flagged windows; see [ai/benchmark/RESULTS.md](ai/benchmark/RESULTS.md) |
-| AI beat classifier (trained on Icentia11k) | planned, see [analysis/README.md](analysis/README.md#next-ai-classifier) |
+| AI second readers – `ai/` (open ECGFounder 1-lead, Ambiq heartKIT, CLEF) | long-term benchmark: 344 held-out patients, 4,925 h at 130 Hz. Router: AF 201/201 patients, frequent PVC/PAC and brady 100 %, VT 91 %, pauses 64 %; about 63 false findings per day. See [ai/benchmark/RESULTS.md](ai/benchmark/RESULTS.md) |
+| AI fine-tuning (Icentia11k + 7 sources, beat model with a noise class) | kit ready, not yet run on the cluster; see [ai/FINETUNING_PLAN.md](ai/FINETUNING_PLAN.md) |
 
 ## Analysis quick start
 

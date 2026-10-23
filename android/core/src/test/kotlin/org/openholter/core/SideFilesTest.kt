@@ -50,10 +50,12 @@ class SideFilesTest {
         val log = EventLog(tmp.root, zone)
         log.log(t0, "connected", "A1B2C3D4")
         log.log(t0 + 1_500_000_000L, "disconnected", "tab\there")
+        log.log(t0 + 2_000_000_000L, "h10_info", "firmware 5.0.0\u0000")
         val lines = RecordingFiles.eventsFile(tmp.root, LocalDate.of(2026, 10, 21)).readLines()
         assertEquals(RecordingFiles.EVENTS_HEADER, lines[0])
         assertEquals("2026-10-21 09:00:00.000\t$t0\tconnected\tA1B2C3D4", lines[1])
         assertEquals("2026-10-21 09:00:01.500\t${t0 + 1_500_000_000L}\tdisconnected\ttab here", lines[2])
+        assertEquals("2026-10-21 09:00:02.000\t${t0 + 2_000_000_000L}\th10_info\tfirmware 5.0.0", lines[3])
     }
 
     @Test

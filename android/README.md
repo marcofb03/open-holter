@@ -34,8 +34,11 @@ directly.
 - **Export**: share one day's files (share sheet: Drive, Quick Share,
   e-mail …), or copy all new files into any folder through the system file
   picker (USB stick, Drive folder, …).
-- Backups are off (`allowBackup=false`), there are no analytics, and the app
-  never connects to the network.
+- **App updates** from the newest build of `main`, only when you tap
+  *Update now* (see *Updates* below).
+- Backups are off (`allowBackup=false`) and there are no analytics. The only
+  network use is checking for and downloading app updates from GitHub;
+  recordings never leave the phone unless you export them.
 
 ### H10 battery protection
 
@@ -77,12 +80,37 @@ The APK is built by GitHub Actions. You do not need Android Studio.
 6. Put the strap on (wet the electrodes), go to **Device → Scan**, and tap your
    H10. Recording starts and the app remembers the strap.
 
-**Updating:** install the new APK over the old one. Recordings stay, and
-recording restarts by itself after the update. This only works with the
+**Updating:** use *About → App updates* (below), or install the new APK over
+the old one. Recordings stay, and recording restarts by itself after the
+update. This only works with the
 signed APK (`open-holter-<version>.apk`): debug APKs are signed with a
 different key on every CI run. If Android says "App not installed" when you
 update, the signing key changed. You must then uninstall first, **which
 deletes the recordings, so export them first**.
+
+### Updates
+
+Every push to `main` that changes the app makes CI publish a signed APK to the
+rolling GitHub pre-release **`nightly`**, together with `version.json`
+(versionCode, version name, commit, SHA-256 of the APK).
+
+The app looks for a newer build when it opens and on *About → Check for
+updates*. It never installs by itself: you choose the moment and tap
+**Update now**. The APK is downloaded, its SHA-256 is checked, and Android
+installs it (Android also refuses any APK that is not signed with the same
+key). The first time, Android asks you to allow *Install unknown apps* for
+open-holter (*Allow app updates* button). Updates then install without
+another dialog where Android permits an app to update itself
+(`PackageInstaller.SessionParams#setRequireUserAction`, Android 12 and
+later); otherwise Android shows one confirmation.
+
+While recording, the update stops the H10 streams cleanly (like *Pause*),
+which protects the H10 battery, and restarts recording when the new version
+starts. The ECG is missing for about half a minute. The event log marks it
+(`update_start`, then `update_installed` in the new version), and
+`analysis/ecgpipe` lists it as a recording gap with the reason "app update".
+A recording gap is never analysed as a heart pause: the analysis splits the
+recording at every gap.
 
 Recommended Pixel settings for a dedicated recorder phone: Bluetooth always
 on, *Adaptive Battery* can stay on (the app is exempt), turn off automatic
@@ -201,7 +229,8 @@ time_local	timestamp_ns	event	detail
 Main events: `start`, `stop`, `pause`, `resume`, `connected`, `disconnected`,
 `disconnect_reason`, `reconnect`, `streams_start`, `no_data`, `no_contact`,
 `contact_back`, `ecg_gap`, `marker`, `h10_battery`, `bluetooth_off`/`_on`,
-`service_restart`, and `*_error`.
+`service_restart`, `update_start`, `update_installed`, `update_failed`, and
+`*_error`.
 
 Storage needed: about 15 MB per hour of ECG, roughly 0.4–0.5 GB per day with
 all files. The status screen shows the free space.
@@ -236,8 +265,9 @@ events log on the phone shows the same information.
 10. [ ] Turn Bluetooth off for 1 min and on again: recording resumes.
 11. [ ] Reboot the phone without opening the app: recording restarts
         (`service_restart` in the log).
-12. [ ] Install a newer APK over the old one: recording restarts and the old
-        files are still there.
+12. [ ] *About → Check for updates → Update now* while recording (or install
+        a newer APK over the old one): recording restarts, the old files are
+        still there, and the log shows `update_start` → `update_installed`.
 13. [ ] Hour change: a new `ecg_…_HH.csv` starts at the full hour with a
         single header.
 14. [ ] *Files → Share* a day to another app, and *Export to folder*. Run

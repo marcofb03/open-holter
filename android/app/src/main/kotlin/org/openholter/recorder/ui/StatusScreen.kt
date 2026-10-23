@@ -44,6 +44,7 @@ import org.openholter.recorder.RecorderHub
 import org.openholter.recorder.RecorderHub.Link
 import org.openholter.recorder.RecorderService
 import org.openholter.recorder.Storage
+import org.openholter.recorder.Updater
 import java.time.LocalDate
 
 @Composable
@@ -56,6 +57,7 @@ fun StatusScreen(
     val prefs = HolterApp.from(context).prefs
     val status by RecorderHub.statusFlow.collectAsStateWithLifecycle()
     val ecg by RecorderHub.ecgPreview.collectAsStateWithLifecycle()
+    val update by Updater.state.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
 
     var recordingWanted by remember { mutableStateOf(prefs.recordingActive) }
@@ -110,6 +112,12 @@ fun StatusScreen(
                         Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
                     )
                 }) { Text("Allow unrestricted battery") }
+            }
+        }
+
+        if (update is Updater.State.Available) {
+            InfoCard("App update available") {
+                Text("${(update as Updater.State.Available).release.versionName}: install it from About → App updates when it suits you.")
             }
         }
 

@@ -32,9 +32,11 @@ fun AboutScreen() {
     ) {
         Text("open-holter recorder ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.headlineSmall)
         NotMedicalBanner()
+        UpdateCard()
         Text(
             "Records the single-lead ECG of a Polar H10 chest strap 24/7 into open CSV files on this phone, " +
-                "with a symptom marker. Everything stays on the device until you export it.",
+                "with a symptom marker. Everything stays on the device until you export it. The only network " +
+                "use is checking for and downloading app updates from GitHub when you ask for it.",
         )
         Text(
             "This app is an independent open-source project (MIT licence). It is not made, endorsed or " +

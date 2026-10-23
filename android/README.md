@@ -32,7 +32,9 @@ directly.
   state survives a reboot or app update. *Start* reconnects. In the event log
   this is `pause` / `resume`.
 - A status screen with connection state, H10 battery, a live ECG trace (last
-  10 s), heart rate, hours recorded today, storage used and free, and the last
+  10 s; it shows only ECG that is arriving now, is emptied at every stop, and
+  the status says *Starting ECG…* instead of *Recording* until the first new
+  samples arrive), heart rate, hours recorded today, storage used and free, and the last
   marker.
 - **Export**: share one day's files (share sheet: Drive, Quick Share,
   e-mail …), or copy all new files into any folder through the system file

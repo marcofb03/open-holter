@@ -54,6 +54,16 @@ fun StatusScreen(
     val prefs = HolterApp.from(context).prefs
     val status by RecorderHub.statusFlow.collectAsStateWithLifecycle()
     val ecg by RecorderHub.ecgPreview.collectAsStateWithLifecycle()
+    val lastEcgMs by RecorderHub.lastEcgMs.collectAsStateWithLifecycle()
+    // Ticks once a second so "Recording" turns into "Starting ECG…" as soon as data stops.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    val receivingEcg = RecorderHub.receivingEcg(status.link, lastEcgMs, nowMs)
     val update by Updater.state.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
 
@@ -118,7 +128,7 @@ fun StatusScreen(
         }
 
         InfoCard("Connection") {
-            Text(linkText(status.link, recordingWanted), style = MaterialTheme.typography.headlineSmall)
+            Text(linkText(status.link, recordingWanted, receivingEcg), style = MaterialTheme.typography.headlineSmall)
             Text("H10: ${deviceId ?: "none chosen"}" + (status.batteryPercent?.let { " · battery $it%" } ?: ""))
             status.linkSinceMs?.let { if (recording) Text("since ${formatTime(it)}", style = MaterialTheme.typography.bodySmall) }
             if (status.link == Link.NO_CONTACT) {
@@ -132,7 +142,10 @@ fun StatusScreen(
         }
 
         InfoCard("Live ECG (last 10 s)") {
-            EcgTrace(if (status.link == Link.STREAMING) ecg else FloatArray(0), capacity = RecorderHub.PREVIEW_SAMPLES)
+            EcgTrace(if (receivingEcg) ecg else FloatArray(0), capacity = RecorderHub.PREVIEW_SAMPLES)
+            if (status.link == Link.STREAMING && !receivingEcg) {
+                Text("Waiting for the first ECG from the H10. Nothing is being recorded yet.", style = MaterialTheme.typography.bodySmall)
+            }
         }
 
         Button(
@@ -186,11 +199,11 @@ fun StatusScreen(
     }
 }
 
-private fun linkText(link: Link, wanted: Boolean): String = when (link) {
+private fun linkText(link: Link, wanted: Boolean, receivingEcg: Boolean): String = when (link) {
     Link.IDLE -> if (wanted) "Starting…" else "Not recording"
     Link.CONNECTING -> "Searching for H10…"
     Link.CONNECTED -> "Connected, starting ECG…"
-    Link.STREAMING -> "Recording"
+    Link.STREAMING -> if (receivingEcg) "Recording" else "Starting ECG…"
     Link.NO_CONTACT -> "No skin contact"
     Link.PAUSED -> "Stopped – tap Start recording when the strap is on"
 }

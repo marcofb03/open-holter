@@ -391,6 +391,7 @@ class RecorderService : LifecycleService() {
         accJob?.cancelAndJoin()
         ecgJob = null
         accJob = null
+        clearLivePreview()
         if (!hadStreams && quiet) return
         // Cancelling the flows already makes the SDK stop the measurement; the explicit
         // calls make sure, even if a flow had already failed.
@@ -399,6 +400,14 @@ class RecorderService : LifecycleService() {
         if (hadStreams) delay(STOP_GRACE_MS)
         ecgWriter?.flush()
         accWriter?.flush()
+    }
+
+    /** The live trace shows only ECG of the current stream, never beats from before a stop. */
+    private fun clearLivePreview() {
+        preview.clear()
+        lastEcgEventMs = 0L
+        RecorderHub.ecgPreview.value = FloatArray(0)
+        RecorderHub.lastEcgMs.value = null
     }
 
     private fun startHr(deviceId: String) {
@@ -437,6 +446,7 @@ class RecorderService : LifecycleService() {
             lastEcgEventMs = nowMs
             events.trySend(Event.EcgData)
             RecorderHub.ecgPreview.value = preview.snapshot()
+            RecorderHub.lastEcgMs.value = nowMs
         }
     }
 
@@ -570,7 +580,12 @@ class RecorderService : LifecycleService() {
         )
         val hours = "%.1f h today".format(st.todayRecordedSeconds / 3600.0)
         val title = when (st.link) {
-            RecorderHub.Link.STREAMING -> "Recording ECG" + (st.heartRate?.let { " · $it bpm" } ?: "")
+            RecorderHub.Link.STREAMING ->
+                if (RecorderHub.receivingEcg(st.link, RecorderHub.lastEcgMs.value, System.currentTimeMillis())) {
+                    "Recording ECG" + (st.heartRate?.let { " · $it bpm" } ?: "")
+                } else {
+                    "Starting ECG… (not recording yet)"
+                }
             RecorderHub.Link.CONNECTING -> "Waiting for H10…"
             RecorderHub.Link.CONNECTED -> "H10 connected, starting…"
             RecorderHub.Link.NO_CONTACT -> "No skin contact – strap off?"

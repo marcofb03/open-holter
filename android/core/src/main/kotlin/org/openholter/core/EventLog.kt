@@ -17,7 +17,9 @@ class EventLog(private val root: File, private val zone: ZoneId) {
         file.parentFile?.mkdirs()
         val isNew = !file.exists() || file.length() == 0L
         val local = LocalDateTime.ofInstant(RecordingFiles.instantOf(timestampNs), zone)
-        val clean = detail.replace('\t', ' ').replace('\n', ' ')
+        // Tabs, line breaks and other control characters (the H10 ends its Device
+        // Information strings with a NUL byte) would break the tab-separated lines.
+        val clean = detail.map { if (it.isISOControl()) ' ' else it }.joinToString("").trim()
         file.appendText(
             buildString {
                 if (isNew) append(RecordingFiles.EVENTS_HEADER).append('\n')

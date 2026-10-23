@@ -227,7 +227,9 @@ time_local	timestamp_ns	event	detail
 
 Main events: `start`, `stop`, `pause`, `resume`, `connected`, `disconnected`,
 `disconnect_reason`, `reconnect`, `streams_start`, `no_data`, `no_contact`,
-`contact_back`, `ecg_gap`, `marker`, `h10_battery`, `bluetooth_off`/`_on`,
+`contact_back`, `ecg_gap`, `marker`, `h10_battery`, `h10_info` (model,
+firmware, hardware and software revision at each connect; ECG needs firmware
+3.0.35 or later), `bluetooth_off`/`_on`,
 `service_restart`, `update_start`, `update_installed`, `update_failed`, and
 `*_error`.
 

@@ -299,6 +299,7 @@ class RecorderService : LifecycleService() {
                 publishStatus()
             }
             is PolarEvents.E.Power -> events.trySend(Event.BluetoothPower(e.on))
+            is PolarEvents.E.Info -> log("h10_info", "${e.name} ${e.value}")
         }
     }
 

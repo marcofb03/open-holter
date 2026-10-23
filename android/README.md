@@ -58,8 +58,8 @@ The APK is built by GitHub Actions. You do not need Android Studio.
 
 1. **Download the APK** on the phone:
    - Releases: open the repository's **Releases** page and download
-     `open-holter-<version>-debug.apk` from the latest release (created when a
-     `v*` tag is pushed); or
+     `open-holter-<version>.apk` (signed, see *Release signing*) from the
+     latest release (created when a `v*` tag is pushed); or
    - Latest build: **Actions → Android →** the newest green run →
      **Artifacts → open-holter-apk** (you need to be logged in to GitHub; the
      artifact is a zip that contains the APK).
@@ -78,11 +78,11 @@ The APK is built by GitHub Actions. You do not need Android Studio.
    H10. Recording starts and the app remembers the strap.
 
 **Updating:** install the new APK over the old one. Recordings stay, and
-recording restarts by itself after the update. Debug APKs from different
-build machines are signed with different debug keys. If Android says "App not
-installed" when you update, the signing key changed. You must then uninstall
-first, **which deletes the recordings, so export them first**. A release
-keystore (below) avoids this.
+recording restarts by itself after the update. This only works with the
+signed APK (`open-holter-<version>.apk`): debug APKs are signed with a
+different key on every CI run. If Android says "App not installed" when you
+update, the signing key changed. You must then uninstall first, **which
+deletes the recordings, so export them first**.
 
 Recommended Pixel settings for a dedicated recorder phone: Bluetooth always
 on, *Adaptive Battery* can stay on (the app is exempt), turn off automatic
@@ -270,20 +270,27 @@ Code layout:
 | `core/` | plain Kotlin/JVM: CSV writers, hourly rotation, `ClockMapper`, `RecorderMachine` (connect / reconnect / pause / no-contact logic). Unit-tested. |
 | `app/` | Android: `RecorderService` (foreground service, Polar SDK), `BootReceiver`, Compose UI (`ui/`), export (`Storage`). |
 
-### Release signing (later)
+### Release signing
 
-For now the APK uses debug signing, and no signing material is in the
-repository. To get stable, properly signed releases (so updates install over
-each other from any build machine):
+No signing material is in the repository. Debug APKs from CI are signed with
+a new debug key on every run, so they do not install over each other. To get
+stable, properly signed builds (so updates install over each other from any
+build machine):
 
 1. Create a keystore once, on your own computer, and keep it out of git
-   (`*.jks` and `*.keystore` are git-ignored):
-   `keytool -genkeypair -v -keystore release.jks -alias release -keyalg RSA -keysize 4096 -validity 10000`
-2. In GitHub, go to *Settings → Secrets and variables → Actions* and add:
-   - `RELEASE_KEYSTORE_BASE64`: output of `base64 -i release.jks`
-   - `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS` (`release`), `RELEASE_KEY_PASSWORD`
-3. Push a `v*` tag. CI then also builds `open-holter-<version>.apk`, signed
-   with your key, and attaches it to the release.
+   (`*.jks` and `*.keystore` are git-ignored). Back it up: without it, the app
+   can never be updated again without uninstalling.
+   `keytool -genkeypair -v -keystore release.jks -alias release -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=open-holter"`
+2. Add the GitHub Actions secrets (or use *Settings → Secrets and variables →
+   Actions*). keytool's default PKCS12 format uses one password for the
+   keystore and the key, so both password secrets get the same value:
+   - `base64 -i release.jks | gh secret set RELEASE_KEYSTORE_BASE64`
+   - `gh secret set RELEASE_KEY_ALIAS --body release`
+   - `gh secret set RELEASE_KEYSTORE_PASSWORD` and `gh secret set RELEASE_KEY_PASSWORD`
+3. Every push to `main` and every `v*` tag then also builds
+   `open-holter-<version>.apk`, signed with your key. It is in the
+   `open-holter-apk` artifact, and tags attach it to the release. Install this
+   one, not the `-debug` APK.
 
 Switching from the debug APK to the release APK changes the signing key once,
 so export the recordings and uninstall the debug app first.

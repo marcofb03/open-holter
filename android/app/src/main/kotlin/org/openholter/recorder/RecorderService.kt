@@ -51,6 +51,7 @@ import org.openholter.core.RecordingFiles
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Locale
 
 /**
  * Foreground service (type `connectedDevice`) that owns the H10 connection and
@@ -475,7 +476,8 @@ class RecorderService : LifecycleService() {
         if (ecgWriter != null) return
         val root = Storage.root(this)
         ecgWriter = EcgCsvWriter(root, zone, onGap = { from, to ->
-            log("ecg_gap", "%.1f s without ECG since %d".format((to - from) / 1e9, from))
+            // Locale.ROOT: always a decimal point in the log, whatever the phone language.
+            log("ecg_gap", "%.1f s without ECG since %d".format(Locale.ROOT, (to - from) / 1e9, from))
         })
         accWriter = AccCsvWriter(root, zone)
         hrWriter = HrCsvWriter(root, zone)

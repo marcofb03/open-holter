@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import org.openholter.recorder.Updater
 
 val REQUIRED_PERMISSIONS = arrayOf(
     Manifest.permission.BLUETOOTH_SCAN,
@@ -56,6 +58,8 @@ fun HolterRoot() {
             permissionsVersion++
         }
         val missing = remember(permissionsVersion) { missingPermissions(context) }
+        // Only looks for a newer build; installing is always the user's choice (About → App updates).
+        LaunchedEffect(Unit) { Updater.check() }
         Scaffold(
             bottomBar = {
                 NavigationBar {

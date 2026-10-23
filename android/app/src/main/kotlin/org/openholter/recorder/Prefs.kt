@@ -30,6 +30,11 @@ class Prefs(context: Context) {
         get() = sp.getLong("last_marker_ms", 0L)
         set(v) = sp.edit { putLong("last_marker_ms", v) }
 
+    /** Version that started an app update while recording; logged by the new version. */
+    var updateFrom: String?
+        get() = sp.getString("update_from", null)
+        set(v) = sp.edit { putString("update_from", v) }
+
     var exportTreeUri: String?
         get() = sp.getString("export_tree_uri", null)
         set(v) = sp.edit { putString("export_tree_uri", v) }

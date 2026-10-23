@@ -48,6 +48,7 @@ import org.openholter.core.RecorderMachine.Action
 import org.openholter.core.RecorderMachine.Event
 import org.openholter.core.RecorderMachine.State
 import org.openholter.core.RecordingFiles
+import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -153,6 +154,10 @@ class RecorderService : LifecycleService() {
             ACTION_RESTORE -> {
                 val id = prefs.deviceId
                 if (prefs.recordingActive && id != null && machine.state == State.Idle) {
+                    prefs.updateFrom?.let {
+                        log("update_installed", "$it -> ${BuildConfig.VERSION_NAME}; ECG resumes after the update gap")
+                        prefs.updateFrom = null
+                    }
                     log("service_restart", "restored recording")
                     startRecording(id, paused = prefs.paused)
                 }
@@ -166,6 +171,12 @@ class RecorderService : LifecycleService() {
                 events.trySend(Event.Resume)
             }
             ACTION_MARK -> mark()
+            ACTION_UPDATE -> lifecycleScope.launch(worker) { prepareUpdate(intent) }
+            ACTION_UPDATE_FAILED -> {
+                prefs.updateFrom = null
+                log("update_failed", intent?.getStringExtra(EXTRA_DETAIL).orEmpty())
+                if (!prefs.paused) events.trySend(Event.Resume)
+            }
             ACTION_STOP -> {
                 prefs.recordingActive = false
                 prefs.paused = false
@@ -195,6 +206,33 @@ class RecorderService : LifecycleService() {
         prefs.lastMarkerMs = ms
         vibrate()
         publishStatus()
+    }
+
+    /**
+     * Before an app update: log it, stop the H10 streams and disconnect cleanly
+     * (as for a pause, so the H10 battery is safe), flush the files, then hand
+     * the APK to the installer, which ends this process. The new version
+     * restores recording ([BootReceiver]) and logs `update_installed`.
+     */
+    private suspend fun prepareUpdate(intent: Intent?) {
+        val apk = intent?.getStringExtra(EXTRA_APK) ?: return
+        val to = intent.getStringExtra(EXTRA_VERSION).orEmpty()
+        if (prefs.recordingActive) prefs.updateFrom = BuildConfig.VERSION_NAME
+        log("update_start", "${BuildConfig.VERSION_NAME} -> $to; ECG stops for the app update, nothing recorded until update_installed")
+        val s = machine.state
+        if (s is State.Active && s !is State.Paused) {
+            events.trySend(Event.Pause)
+            withTimeoutOrNull(10_000) { while (machine.state !is State.Paused) delay(100) }
+            delay(UPDATE_TEARDOWN_MS) // Pause stops the streams (1 s grace), then disconnects
+        }
+        ecgWriter?.flush(sync = true)
+        accWriter?.flush(sync = true)
+        hrWriter?.flush(sync = true)
+        try {
+            Updater.commit(this, File(apk))
+        } catch (e: Exception) {
+            Updater.onInstallFailed(this, e.toString())
+        }
     }
 
     // ---- event loop -----------------------------------------------------------------------
@@ -590,6 +628,7 @@ class RecorderService : LifecycleService() {
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
         private const val STOP_GRACE_MS = 1_000L
+        private const val UPDATE_TEARDOWN_MS = 2_500L
 
         const val ACTION_START = "org.openholter.recorder.START"
         const val ACTION_STOP = "org.openholter.recorder.STOP"
@@ -597,11 +636,28 @@ class RecorderService : LifecycleService() {
         const val ACTION_RESUME = "org.openholter.recorder.RESUME"
         const val ACTION_MARK = "org.openholter.recorder.MARK"
         const val ACTION_RESTORE = "org.openholter.recorder.RESTORE"
+        const val ACTION_UPDATE = "org.openholter.recorder.UPDATE"
+        const val ACTION_UPDATE_FAILED = "org.openholter.recorder.UPDATE_FAILED"
         const val EXTRA_DEVICE_ID = "device_id"
+        private const val EXTRA_APK = "apk"
+        private const val EXTRA_VERSION = "version"
+        private const val EXTRA_DETAIL = "detail"
 
         fun send(context: Context, action: String, deviceId: String? = null) {
             val intent = Intent(context, RecorderService::class.java).setAction(action)
             if (deviceId != null) intent.putExtra(EXTRA_DEVICE_ID, deviceId)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun sendUpdate(context: Context, apk: File, version: String) {
+            val intent = Intent(context, RecorderService::class.java).setAction(ACTION_UPDATE)
+                .putExtra(EXTRA_APK, apk.absolutePath).putExtra(EXTRA_VERSION, version)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun sendUpdateFailed(context: Context, detail: String) {
+            val intent = Intent(context, RecorderService::class.java).setAction(ACTION_UPDATE_FAILED)
+                .putExtra(EXTRA_DETAIL, detail)
             ContextCompat.startForegroundService(context, intent)
         }
     }

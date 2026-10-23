@@ -26,8 +26,11 @@ directly.
   seconds.
 - A big **MARK SYMPTOM** button in the app and a **Mark symptom** action in
   the notification. The phone time of the press goes into the `marker` column.
-- **Pause for shower / Resume**: stops the ECG and ACC streams cleanly and then
-  disconnects. Also available from the notification.
+- **One Start / Stop recording button** (also in the notification). *Stop*
+  stops the ECG and ACC streams cleanly and then disconnects. The
+  notification stays as a reminder ("Stopped – tap Start…"), and the stopped
+  state survives a reboot or app update. *Start* reconnects. In the event log
+  this is `pause` / `resume`.
 - A status screen with connection state, H10 battery, a live ECG trace (last
   10 s), heart rate, hours recorded today, storage used and free, and the last
   marker.
@@ -50,9 +53,9 @@ off the strap. The app handles this as follows:
   streams first and waits 1 s. The state machine is unit-tested for this rule
   (`RecorderMachineTest`, including a randomised test).
 - If the strap reports **no skin contact for 3 minutes** (strap taken off
-  without pressing Pause), ECG and ACC are stopped. Heart rate keeps running,
+  without pressing Stop), ECG and ACC are stopped. Heart rate keeps running,
   and ECG restarts as soon as there is contact again.
-- **Use "Pause for shower" before you take the strap off.** It is the clean
+- **Tap "Stop recording" before you take the strap off.** It is the clean
   way to do it.
 
 ## Install on the Pixel
@@ -104,7 +107,7 @@ another dialog where Android permits an app to update itself
 (`PackageInstaller.SessionParams#setRequireUserAction`, Android 12 and
 later); otherwise Android shows one confirmation.
 
-While recording, the update stops the H10 streams cleanly (like *Pause*),
+While recording, the update stops the H10 streams cleanly (like *Stop*),
 which protects the H10 battery, and restarts recording when the new version
 starts. Nothing is recorded for about half a minute; the event log shows
 why (`update_start`, then `update_installed` in the new version). The
@@ -117,11 +120,11 @@ system-update restarts at night if you can, and keep at least 20 GB free.
 
 ## Daily use
 
-- **Morning:** put on the strap. If recording was paused, tap **Resume**.
+- **Morning:** put on the strap. If recording was stopped, tap **Start recording**.
 - **Symptom:** tap **MARK SYMPTOM** (or *Mark symptom* in the notification) as
   soon as you can. The phone vibrates briefly.
-- **Shower or taking the strap off:** tap **Pause for shower** first, and
-  **Resume** afterwards.
+- **Shower or taking the strap off:** tap **Stop recording** first, and
+  **Start recording** when the strap is back on.
 - **Night:** charge the phone. Whether you keep wearing the strap is up to
   you.
 - **Every few days:** *Files → Export new files* to a folder outside the app.
@@ -257,8 +260,8 @@ events log on the phone shows the same information.
        still there).
 7. [ ] Walk out of Bluetooth range for 2 min, then come back:
        `disconnected` → `connected` → `streams_start`, and one `ecg_gap`.
-8. [ ] *Pause for shower*: status *Paused*. Take the H10 off the strap for
-       10 min, put it back, tap *Resume*: recording resumes. (The H10's LED
+8. [ ] *Stop recording*: status *Stopped*. Take the H10 off the strap for
+       10 min, put it back, tap *Start recording*: recording resumes. (The H10's LED
        should not keep blinking while it is off the strap.)
 9. [ ] Take the strap off **without** pausing: after about 3 min the status
        shows *No skin contact* (`no_contact` in the log). Put it back on:

@@ -572,7 +572,7 @@ class RecorderService : LifecycleService() {
             RecorderHub.Link.CONNECTING -> "Waiting for H10…"
             RecorderHub.Link.CONNECTED -> "H10 connected, starting…"
             RecorderHub.Link.NO_CONTACT -> "No skin contact – strap off?"
-            RecorderHub.Link.PAUSED -> "Paused – tap Resume when the strap is back on"
+            RecorderHub.Link.PAUSED -> "Stopped – tap Start when the strap is back on"
             RecorderHub.Link.IDLE -> "Not recording"
         }
         val b = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -587,9 +587,9 @@ class RecorderService : LifecycleService() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .addAction(0, "Mark symptom", servicePendingIntent(ACTION_MARK, 1))
         if (st.link == RecorderHub.Link.PAUSED) {
-            b.addAction(0, "Resume", servicePendingIntent(ACTION_RESUME, 2))
+            b.addAction(0, "Start", servicePendingIntent(ACTION_RESUME, 2))
         } else {
-            b.addAction(0, "Pause for shower", servicePendingIntent(ACTION_PAUSE, 3))
+            b.addAction(0, "Stop", servicePendingIntent(ACTION_PAUSE, 3))
         }
         return b.build()
     }

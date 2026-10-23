@@ -14,13 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,7 +60,6 @@ fun StatusScreen(
     var recordingWanted by remember { mutableStateOf(prefs.recordingActive) }
     var batteryExempt by remember { mutableStateOf(true) }
     var storage by remember { mutableStateOf<Storage.Usage?>(null) }
-    var confirmStop by remember { mutableStateOf(false) }
     var justMarked by remember { mutableStateOf<Long?>(null) }
 
     LifecycleResumeEffect(Unit) {
@@ -166,17 +162,17 @@ fun StatusScreen(
                     enabled = missingPermissions.isEmpty(),
                     modifier = Modifier.weight(1f),
                 ) { Text("Start recording") }
+                // One button. "Stop" stops the H10 streams and disconnects but keeps the
+                // service and its reminder notification, and survives a reboot; "Start"
+                // reconnects. (Internally this is the pause / resume of RecorderMachine.)
                 status.link == Link.PAUSED -> Button(
                     onClick = { RecorderService.send(context, RecorderService.ACTION_RESUME) },
                     modifier = Modifier.weight(1f),
-                ) { Text("Resume (strap on)") }
+                ) { Text("Start recording") }
                 else -> Button(
                     onClick = { RecorderService.send(context, RecorderService.ACTION_PAUSE) },
                     modifier = Modifier.weight(1f),
-                ) { Text("Pause for shower") }
-            }
-            if (recording) {
-                OutlinedButton(onClick = { confirmStop = true }) { Text("Stop") }
+                ) { Text("Stop recording") }
             }
         }
 
@@ -188,22 +184,6 @@ fun StatusScreen(
         }
         Spacer(Modifier.height(8.dp))
     }
-
-    if (confirmStop) {
-        AlertDialog(
-            onDismissRequest = { confirmStop = false },
-            title = { Text("Stop recording?") },
-            text = { Text("Use \"Pause for shower\" for short breaks. Stop ends the recording until you start it again.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmStop = false
-                    recordingWanted = false
-                    RecorderService.send(context, RecorderService.ACTION_STOP)
-                }) { Text("Stop") }
-            },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel") } },
-        )
-    }
 }
 
 private fun linkText(link: Link, wanted: Boolean): String = when (link) {
@@ -212,5 +192,5 @@ private fun linkText(link: Link, wanted: Boolean): String = when (link) {
     Link.CONNECTED -> "Connected, starting ECG…"
     Link.STREAMING -> "Recording"
     Link.NO_CONTACT -> "No skin contact"
-    Link.PAUSED -> "Paused"
+    Link.PAUSED -> "Stopped – tap Start recording when the strap is on"
 }

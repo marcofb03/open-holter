@@ -58,10 +58,13 @@ jobs:
           -PversionName=${{ steps.version.outputs.name }}
           -PversionCode=${{ steps.version.outputs.code }}
 
-      # Optional: a properly signed release APK, only when the keystore secrets exist
-      # (see android/README.md, "Release signing").
+      # A properly signed release APK on main and on tags, only when the keystore secrets
+      # exist (see android/README.md, "Release signing"). Every such build has the same
+      # key, so it installs over the previous one and keeps the recordings.
       - name: Build signed release APK
-        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_RELEASE_KEYSTORE == 'true'
+        if: >
+          github.event_name != 'pull_request' && env.HAS_RELEASE_KEYSTORE == 'true' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}

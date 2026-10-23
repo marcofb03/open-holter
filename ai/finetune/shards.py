@@ -68,10 +68,11 @@ class ChunkStream:
     """
 
     def __init__(self, files: list[Path], kind: str, transform, chunk: int = 1024, seed: int = 0,
-                 threads: int = 4):
+                 threads: int = 4, extra: tuple[str, ...] = ()):
         import h5py
 
         self.files, self.kind, self.chunk, self.seed = sorted(files), kind, chunk, seed
+        self.extra = extra  # more per-row arrays (f"{kind}_{name}") passed to transform as keywords
         self.transform, self.threads = transform, threads
         self.index, self.fs, self.n_rows = [], {}, 0
         for i, p in enumerate(self.files):
@@ -98,10 +99,11 @@ class ChunkStream:
         with h5py.File(self.files[i], "r") as f:
             x = f[f"{self.kind}_x"][s:s + self.chunk]
             y = f[f"{self.kind}_y"][s:s + self.chunk]
+            more = {e: f[f"{self.kind}_{e}"][s:s + self.chunk] for e in self.extra}
         rng = np.random.default_rng([self.seed, epoch, k])
         p = rng.permutation(len(y))
         uid = (np.uint64(i) << np.uint64(32)) + (s + p).astype(np.uint64)  # stable id of each example
-        return self.transform(x[p], y[p], self.fs[i], rng, uid=uid, epoch=epoch)
+        return self.transform(x[p], y[p], self.fs[i], rng, uid=uid, epoch=epoch, **{e: v[p] for e, v in more.items()})
 
     def __iter__(self):
         """Yields converted chunks; (epoch, pos) advances as each chunk is handed out."""

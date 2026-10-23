@@ -26,8 +26,7 @@ import java.security.MessageDigest
  * checked against version.json, and Android itself refuses an APK that is not
  * signed with the same key as the installed app. While recording, the service
  * first stops the H10 streams cleanly and logs `update_start`; the new version
- * logs `update_installed` when it restarts. The ECG gap in between is a
- * recording gap, not a heart pause.
+ * logs `update_installed` when it restarts. Nothing is recorded in between.
  *
  * This is the only network access of the app: it talks to github.com and
  * GitHub's download host, and it never uploads anything.

@@ -106,11 +106,10 @@ later); otherwise Android shows one confirmation.
 
 While recording, the update stops the H10 streams cleanly (like *Pause*),
 which protects the H10 battery, and restarts recording when the new version
-starts. The ECG is missing for about half a minute. The event log marks it
-(`update_start`, then `update_installed` in the new version), and
-`analysis/ecgpipe` lists it as a recording gap with the reason "app update".
-A recording gap is never analysed as a heart pause: the analysis splits the
-recording at every gap.
+starts. Nothing is recorded for about half a minute; the event log shows
+why (`update_start`, then `update_installed` in the new version). The
+analysis treats the recording before and after as separate stretches, so the
+stop is never read as a heart pause.
 
 Recommended Pixel settings for a dedicated recorder phone: Bluetooth always
 on, *Adaptive Battery* can stay on (the app is exempt), turn off automatic

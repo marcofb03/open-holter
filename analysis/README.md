@@ -28,11 +28,6 @@ files from the open-holter Android app add evidence to each event:
     --hr  day1_hr.csv         # timestamp_ns,hr_bpm,rr_ms,contact,contact_supported
 ```
 
-The app's `events_*.log` next to the ECG files is read too (or pass
-`--events`). Every gap in the ECG (dropout, pause, app update, strap off) is
-listed with its reason in `gaps.csv` and on the console. Gaps are never
-analysed as heart pauses: each piece between two gaps is analysed separately.
-
 Input files are only read, never changed.
 
 ## What it does

@@ -120,37 +120,3 @@ def test_side_files(tmp_path):
     assert h.contact_supported.all()
     assert [r for _, r in h.rr] == [857, 840, 845]
     assert np.isnan(h.hr[2])
-
-
-def test_gaps_get_reason_from_events_log(tmp_path):
-    from ecgpipe.gaps import load_events_log, recording_gaps
-
-    t, _ = _rows(n=2600, gap_at=1300, gap_s=30.0)
-    ts = t / 1e9
-    last, first = ts[1299], ts[1300]
-    log = tmp_path / "events_2026-10-23.log"
-    _write(log, [
-        "time_local\ttimestamp_ns\tevent\tdetail",
-        f"x\t{int((last - 1) * 1e9)}\tupdate_start\ta -> b; ECG stops for the app update",
-        f"x\t{int((last - 0.5) * 1e9)}\tpause\t",
-        f"x\t{int((first - 3) * 1e9)}\tupdate_installed\ta -> b",
-        f"x\t{int((first + 100) * 1e9)}\tmarker\tsymptom marker",
-    ])
-    events = load_events_log(log)
-    assert [e.event for e in events] == ["update_start", "pause", "update_installed", "marker"]
-    gaps = recording_gaps(ts, events)
-    assert len(gaps) == 1
-    assert gaps[0].reason == "app update"
-    assert gaps[0].duration_s == pytest.approx(30.0 + 1 / 130, abs=1e-3)
-    assert "marker" not in {e.event for e in gaps[0].events}
-
-
-def test_gap_without_event_is_unknown_and_never_a_pause(tmp_path):
-    from ecgpipe.gaps import recording_gaps
-
-    t, v = _rows(n=2600, gap_at=1300, gap_s=5.0)
-    gaps = recording_gaps(t / 1e9, [])
-    assert [g.reason for g in gaps] == ["unknown (no app event logged)"]
-    # The recording is split at the gap, so no RR interval spans it.
-    p = _write(tmp_path / "g.csv", [f"{a},{b:.4f},,," for a, b in zip(t, v)])
-    assert len(split_on_gaps(load_ecglogger_csv(p))) == 2

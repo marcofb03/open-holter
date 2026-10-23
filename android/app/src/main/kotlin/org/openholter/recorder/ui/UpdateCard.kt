@@ -70,9 +70,8 @@ fun UpdateCard() {
             }
         }
         Text(
-            "While recording, the ECG stops for about half a minute during the update. The event log marks " +
-                "the gap (update_start, update_installed) and the analysis treats it as a recording gap, " +
-                "never as a heart pause.",
+            "While recording, the ECG stops for about half a minute during the update and then " +
+                "starts again by itself. The event log shows it (update_start, update_installed).",
             style = MaterialTheme.typography.bodySmall,
         )
     }

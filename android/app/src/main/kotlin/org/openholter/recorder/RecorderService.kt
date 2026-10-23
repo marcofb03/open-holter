@@ -218,7 +218,7 @@ class RecorderService : LifecycleService() {
         val apk = intent?.getStringExtra(EXTRA_APK) ?: return
         val to = intent.getStringExtra(EXTRA_VERSION).orEmpty()
         if (prefs.recordingActive) prefs.updateFrom = BuildConfig.VERSION_NAME
-        log("update_start", "${BuildConfig.VERSION_NAME} -> $to; ECG stops for the app update (recording gap, not a heart pause)")
+        log("update_start", "${BuildConfig.VERSION_NAME} -> $to; ECG stops for the app update, nothing recorded until update_installed")
         val s = machine.state
         if (s is State.Active && s !is State.Paused) {
             events.trySend(Event.Pause)

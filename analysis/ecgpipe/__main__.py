@@ -1,17 +1,14 @@
-"""Usage:  python -m ecgpipe <file.csv> [more.csv ...] -o out_dir [--acc acc.csv ...] [--hr hr.csv ...]
-                         [--events events.log ...]"""
+"""Usage:  python -m ecgpipe <file.csv> [more.csv ...] -o out_dir [--acc acc.csv ...] [--hr hr.csv ...]"""
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 
 from .beats import analyse_beats
 from .context import build_context, rate_events
 from .events import find_events, summary
-from .gaps import load_events_log, recording_gaps, write_gaps_csv
 from .io import Recording, load_accel_csv, load_hr_csv, load_many, split_on_gaps
 from .report import write_report
 
@@ -33,8 +30,6 @@ def main() -> None:
     ap.add_argument("-o", "--out", default="report")
     ap.add_argument("--acc", nargs="*", default=[], help="accelerometer CSV(s) from the app")
     ap.add_argument("--hr", nargs="*", default=[], help="HR / contact CSV(s) from the app")
-    ap.add_argument("--events", nargs="*", default=None,
-                    help="events_*.log from the app (default: those next to the ECG files)")
     args = ap.parse_args()
 
     rec = merge(load_many(args.files))
@@ -43,19 +38,6 @@ def main() -> None:
     segments = split_on_gaps(rec)
     print(f"Loaded {len(rec.source)} file(s), {rec.duration_s / 3600:.2f} h at {rec.fs:.1f} Hz, "
           f"{len(segments)} continuous segment(s), {len(rec.markers)} marker(s)")
-
-    # Gaps in the recording, with the reason from the app's event log. They are
-    # never analysed as heart pauses: each segment between gaps is analysed alone.
-    logs = args.events if args.events is not None else sorted(
-        {str(p) for f in args.files for p in Path(f).resolve().parent.glob("events_*.log")})
-    app_events = [e for p in logs for e in load_events_log(p)]
-    gaps = recording_gaps(rec.t, app_events)
-    if gaps:
-        Path(args.out).mkdir(parents=True, exist_ok=True)
-        write_gaps_csv(Path(args.out) / "gaps.csv", gaps)
-        print(f"{len(gaps)} recording gap(s) (missing ECG, not heart pauses) -> {args.out}/gaps.csv")
-        for g in gaps:
-            print(f"  {g.duration_s:7.1f} s  {g.reason}")
 
     # Each continuous stretch (between Bluetooth dropouts) is analysed separately.
     for k, seg in enumerate(segments):

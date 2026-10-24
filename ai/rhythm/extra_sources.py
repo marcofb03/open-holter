@@ -116,10 +116,11 @@ def patients(source: str) -> list[tuple[str, str, object]]:
         return [(r, _split(source, r), None) for r in recs]
     if source == "butqdb":
         recs = _get(f"{S3}{S3_DIR[source]}/RECORDS").decode().split()
-        by: dict[str, list[str]] = {}
-        for r in recs:  # first three digits: the subject
-            by.setdefault(r.strip("/")[:3], []).append(r.strip("/"))
-        return [(p, _split(source, p), rs) for p, rs in sorted(by.items())]
+        by: dict[str, set[str]] = {}
+        for r in recs:  # lines like "100001/100001_ECG" (and _ACC); first three digits: the subject
+            rec = r.strip("/").split("/")[0]
+            by.setdefault(rec[:3], set()).add(rec)
+        return [(p, _split(source, p), sorted(rs)) for p, rs in sorted(by.items())]
     if source == "vtac":
         rows = list(csv.DictReader(io.StringIO((local(source) / "benchmark_data_split.csv").read_text())))
         lab = {r["event"]: r["decision"] for r in csv.DictReader(io.StringIO((local(source) / "event_labels.csv").read_text()))}

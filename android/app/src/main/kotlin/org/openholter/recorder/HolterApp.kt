@@ -3,6 +3,8 @@ package org.openholter.recorder
 import android.app.Application
 import com.polar.sdk.api.PolarBleApi
 import com.polar.sdk.api.PolarBleApiDefaultImpl
+import org.openholter.core.MarkerStore
+import java.time.ZoneId
 
 class HolterApp : Application() {
 
@@ -23,6 +25,9 @@ class HolterApp : Application() {
     }
 
     val prefs: Prefs by lazy { Prefs(this) }
+
+    /** Symptom markers and their comments, shared by the service, the receiver and the UI. */
+    val markers: MarkerStore by lazy { MarkerStore(Storage.root(this), ZoneId.systemDefault()) }
 
     companion object {
         fun from(context: android.content.Context): HolterApp = context.applicationContext as HolterApp

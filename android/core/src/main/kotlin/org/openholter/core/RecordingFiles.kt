@@ -15,6 +15,7 @@ import java.time.temporal.ChronoUnit
  * <root>/2026-10-21/acc_2026-10-21_14.csv     H10 accelerometer (signal-quality evidence)
  * <root>/2026-10-21/hr_2026-10-21_14.csv      H10 heart rate, RR and skin contact
  * <root>/2026-10-21/events_2026-10-21.log     connection / pause / gap log
+ * <root>/2026-10-21/markers_2026-10-21.csv    symptom markers with optional comment
  * ```
  *
  * Files are split by the local wall-clock hour of the data they contain.
@@ -25,6 +26,7 @@ object RecordingFiles {
     const val ACC_HEADER = "timestamp_ns,x_mG,y_mG,z_mG"
     const val HR_HEADER = "timestamp_ns,hr_bpm,rr_ms,contact,contact_supported"
     const val EVENTS_HEADER = "time_local\ttimestamp_ns\tevent\tdetail"
+    const val MARKERS_HEADER = "timestamp_ns,time_local,comment"
 
     fun hourOf(timestampNs: Long, zone: ZoneId): LocalDateTime =
         LocalDateTime.ofInstant(instantOf(timestampNs), zone).truncatedTo(ChronoUnit.HOURS)
@@ -45,6 +47,9 @@ object RecordingFiles {
 
     fun eventsFile(root: File, day: LocalDate): File =
         File(dayDir(root, day), "events_$day.log")
+
+    fun markersFile(root: File, day: LocalDate): File =
+        File(dayDir(root, day), "markers_$day.csv")
 
     /** Day folders under [root], newest first. */
     fun listDays(root: File): List<LocalDate> =

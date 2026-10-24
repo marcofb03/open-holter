@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -35,7 +36,9 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openholter.core.RecordingFiles
 import org.openholter.recorder.HolterApp
 import org.openholter.recorder.RecorderHub
 import org.openholter.recorder.RecorderHub.Link
@@ -71,6 +74,8 @@ fun StatusScreen(
     var batteryExempt by remember { mutableStateOf(true) }
     var storage by remember { mutableStateOf<Storage.Usage?>(null) }
     var justMarked by remember { mutableStateOf<Long?>(null) }
+    var commentFor by remember { mutableStateOf<Long?>(null) } // marker time (ns) waiting for a comment
+    val scope = rememberCoroutineScope()
 
     LifecycleResumeEffect(Unit) {
         recordingWanted = prefs.recordingActive
@@ -151,10 +156,13 @@ fun StatusScreen(
         Button(
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                justMarked = System.currentTimeMillis()
-                RecorderService.send(context, RecorderService.ACTION_MARK)
+                val now = RecordingFiles.nowNs()
+                justMarked = now / 1_000_000
+                // Stored here too, so the press counts even if the service cannot start.
+                scope.launch { withContext(Dispatchers.IO) { runCatching { HolterApp.from(context).markers.add(now) } } }
+                RecorderService.sendMark(context, now)
+                commentFor = now
             },
-            enabled = recording,
             modifier = Modifier.fillMaxWidth().height(120.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
         ) {
@@ -196,6 +204,22 @@ fun StatusScreen(
             status.currentFile?.let { Text("Writing $it", style = MaterialTheme.typography.bodySmall) }
         }
         Spacer(Modifier.height(8.dp))
+    }
+
+    commentFor?.let { ts ->
+        CommentDialog(
+            title = "Symptom marked at ${formatTime(ts / 1_000_000)}",
+            initial = "",
+            confirmLabel = "Save",
+            dismissLabel = "No comment",
+            onSave = { text ->
+                commentFor = null
+                if (text.isNotBlank()) {
+                    scope.launch { withContext(Dispatchers.IO) { runCatching { HolterApp.from(context).markers.setComment(ts, text) } } }
+                }
+            },
+            onDismiss = { commentFor = null },
+        )
     }
 }
 

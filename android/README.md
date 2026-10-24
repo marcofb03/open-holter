@@ -26,6 +26,20 @@ directly.
   seconds.
 - A big **MARK SYMPTOM** button in the app and a **Mark symptom** action in
   the notification. The phone time of the press goes into the `marker` column.
+  Every press is also kept in `markers_<day>.csv`, even when no ECG is being
+  recorded, so it works as a symptom diary.
+- **Optional comment per marker**: after the app's button a dialog asks for it,
+  after the notification action a second notification with a reply field
+  pops up. Both can be left empty.
+- **Markers tab**: a calendar where days with markers are red, with the
+  number of markers. Tap a day for its markers and comments, tap a marker for
+  a report: the raw ECG from 60 s (or 30 s) before to 15 s after, ECG-paper
+  grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
+  landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed,
+  for a doctor (share sheet: e-mail, Drive, save to Files …).
+- **HR tab**: the H10's heart rate over a chosen day in 1-minute medians,
+  07:00–24:00 by default, any range in half-hour steps. Times without skin
+  contact are left out.
 - **One Start / Stop recording button** (also in the notification). *Stop*
   stops the ECG and ACC streams cleanly and then disconnects. The
   notification stays as a reminder ("Stopped – tap Start…"), and the stopped
@@ -144,6 +158,7 @@ in this column order and with these units:
 | `ecg_*.csv` | `timestamp_ns,ecg_mV,pulse_bpm,rr_ms,marker` | ECGLogger layout: Unix ns, mV, bpm, ms, `1` or empty |
 | `acc_*.csv` | `timestamp_ns,x_mG,y_mG,z_mG` | Unix ns, milli-g (integers) |
 | `hr_*.csv` | `timestamp_ns,hr_bpm,rr_ms,contact,contact_supported` | Unix ns, bpm, ms (may be empty), `0`/`1`, `0`/`1` |
+| `markers_<day>.csv` (daily) | `timestamp_ns,time_local,comment` | Unix ns of the press, local time, comment (always quoted, `"` doubled, may be empty) |
 
 The headers are defined once, in `core/.../RecordingFiles.kt`, and the unit
 tests check them. Changing a column means changing the analysis loaders in
@@ -158,6 +173,7 @@ All files are in app-specific storage:
     acc_2026-10-21_14.csv      accelerometer
     hr_2026-10-21_14.csv       H10 heart rate, RR, skin contact
     events_2026-10-21.log      connection / pause / gap log
+    markers_2026-10-21.csv     symptom markers with optional comment
 ```
 
 Files are split by the **local hour** of the data they contain. If the app
@@ -283,6 +299,14 @@ events log on the phone shows the same information.
         appear in the report.
 16. [ ] 24 h soak test: check the hours recorded today, the phone battery
         drain and the H10 battery.
+17. [ ] *MARK SYMPTOM* in the app: the comment dialog opens; *Save* with and
+        without text. *Mark symptom* in the notification: the comment
+        notification pops up; reply once, tap *No comment* once.
+18. [ ] *Markers* tab: today is red with the right number; open a marker:
+        ECG with the red marker line, the comment; edit it; *Export PDF* and
+        open it (2 pages for 60 s + 15 s, 25 mm/s when printed at 100 %).
+19. [ ] *HR* tab: today's curve from 07:00; change the day and the range;
+        a time with the strap off shows a gap, not a line.
 
 ## Build
 

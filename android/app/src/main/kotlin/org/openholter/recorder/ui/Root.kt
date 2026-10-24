@@ -39,7 +39,8 @@ fun missingPermissions(context: Context): List<String> =
     REQUIRED_PERMISSIONS.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
 
 private enum class Tab(val label: String, val glyph: String) {
-    STATUS("Status", "♥"), DEVICE("Device", "⌁"), FILES("Files", "▤"), ABOUT("About", "ⓘ")
+    STATUS("Status", "♥"), HEART_RATE("HR", "∿"), MARKERS("Markers", "⚑"),
+    DEVICE("Device", "⌁"), FILES("Files", "▤"), ABOUT("About", "ⓘ")
 }
 
 @Composable
@@ -86,6 +87,8 @@ fun HolterRoot() {
                         onGrantPermissions = { launcher.launch(REQUIRED_PERMISSIONS) },
                         onStarted = { tab = Tab.STATUS.ordinal },
                     )
+                    Tab.HEART_RATE -> HeartRateScreen()
+                    Tab.MARKERS -> MarkersScreen()
                     Tab.FILES -> FilesScreen()
                     Tab.ABOUT -> AboutScreen()
                 }

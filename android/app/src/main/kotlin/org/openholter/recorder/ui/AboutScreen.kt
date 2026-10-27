@@ -62,4 +62,5 @@ private val LICENCES = listOf(
     "Polar BLE SDK licence" to "licenses/Polar_SDK_License.txt",
     "Polar SDK third-party software" to "licenses/Polar_SDK_ThirdPartySoftwareListing.txt",
     "open-holter licence (MIT)" to "licenses/open-holter_LICENSE.txt",
+    "Roboto font for PDF reports (Apache 2.0)" to "licenses/Roboto_LICENSE.txt",
 )

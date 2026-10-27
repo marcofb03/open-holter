@@ -20,7 +20,12 @@ import kotlin.math.ceil
 /**
  * PDF of one symptom marker for a doctor: A4 landscape, standard ECG paper
  * scale (25 mm/s, 10 mm/mV, 1 mm / 5 mm grid), 10 s per row, 4 rows per page,
- * as many pages as the window needs. Raw H10 signal, no filtering.
+ * as many pages as the window needs, with a 1 mV calibration pulse before
+ * every row. The signal is drawn as delivered by the H10 (no filtering here).
+ *
+ * Text uses the bundled static Roboto 2.138 (assets/fonts, Apache 2.0): with
+ * the phone's variable system font, Android's PDF writer embeds Type 3 fonts,
+ * from which PDF viewers copy text with missing or extra spaces.
  */
 object MarkerPdf {
     private const val PT_PER_MM = 72f / 25.4f
@@ -47,9 +52,11 @@ object MarkerPdf {
         val beforeS = (marker.timestampNs - fromNs) / 1_000_000_000L
         val afterS = (toNs - marker.timestampNs) / 1_000_000_000L
 
-        val title = Paint().apply { textSize = 14f; typeface = Typeface.DEFAULT_BOLD; isAntiAlias = true }
-        val text = Paint().apply { textSize = 9.5f; isAntiAlias = true }
-        val small = Paint().apply { textSize = 8f; color = Color.DKGRAY; isAntiAlias = true }
+        val regular = font(context, "fonts/Roboto-Regular.ttf", Typeface.NORMAL)
+        val bold = font(context, "fonts/Roboto-Bold.ttf", Typeface.BOLD)
+        val title = Paint().apply { textSize = 14f; typeface = bold; isAntiAlias = true }
+        val text = Paint().apply { textSize = 9.5f; typeface = regular; isAntiAlias = true }
+        val small = Paint().apply { textSize = 8f; typeface = regular; color = Color.DKGRAY; isAntiAlias = true }
         // The comment gets at most 2 lines; the description of the recording is always shown.
         val maxW = PAGE_W - 2 * 40f
         val commentLines = wrap("Comment: " + marker.comment.ifBlank { "(none)" }, text, maxW).let {
@@ -57,8 +64,9 @@ object MarkerPdf {
         }
         val headerLines = commentLines + buildList {
             add(
-                "ECG from $beforeS s before to $afterS s after the marker. Polar H10 chest strap, single lead, 130 Hz, " +
-                    "raw (not filtered). Scale 25 mm/s, 10 mm/mV." +
+                "ECG from $beforeS s before to $afterS s after the marker. Polar H10 chest strap, single lead, 130 Hz. " +
+                    "Signal as delivered by the H10, no extra filtering by the app (the H10's internal filtering is " +
+                    "not documented by Polar). Scale 25 mm/s, 10 mm/mV; the pulse before each row is 1 mV." +
                     (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""),
             )
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
@@ -124,11 +132,28 @@ object MarkerPdf {
             c.drawLine(left, y, left + width, y, if (i % 5 == 0) major else minor)
         }
 
+        val baseY = top + height * 0.6f // room for 2.1 mV up, 1.4 mV down
+        val ink = Paint().apply {
+            color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 0.7f
+            isAntiAlias = true; strokeJoin = Paint.Join.ROUND
+        }
+        // Standard calibration pulse in the margin: 1 mV (10 mm) high, 0.2 s (5 mm) wide.
+        val mm = PT_PER_MM
+        val pulse = Path().apply {
+            moveTo(left - 11 * mm, baseY)
+            lineTo(left - 9 * mm, baseY)
+            lineTo(left - 9 * mm, baseY - MM_PER_MV * mm)
+            lineTo(left - 4 * mm, baseY - MM_PER_MV * mm)
+            lineTo(left - 4 * mm, baseY)
+            lineTo(left - 2 * mm, baseY)
+        }
+        c.drawPath(pulse, ink)
+        c.drawText("1 mV", left - 11 * mm, baseY + 9f, label)
+
         val i0 = w.t.binarySearch(startNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(endNs).let { if (it < 0) -it - 1 else it }
         if (i1 > i0) {
             val median = w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2]
-            val baseY = top + height * 0.6f // room for 2.1 mV up, 1.4 mV down
             val path = Path()
             var prev = Long.MIN_VALUE
             for (i in i0 until i1) {
@@ -136,10 +161,6 @@ object MarkerPdf {
                 val y = baseY - (w.mv[i] - median) * MM_PER_MV * PT_PER_MM
                 if (prev == Long.MIN_VALUE || w.t[i] - prev > 50_000_000L) path.moveTo(x, y) else path.lineTo(x, y)
                 prev = w.t[i]
-            }
-            val ink = Paint().apply {
-                color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 0.7f
-                isAntiAlias = true; strokeJoin = Paint.Join.ROUND
             }
             c.save()
             c.clipRect(left, top, left + width, top + height)
@@ -150,11 +171,17 @@ object MarkerPdf {
         }
         if (markerNs in startNs until endNs) {
             val x = left + (markerNs - startNs) / 1e9f * MM_PER_S * PT_PER_MM
-            val red = Paint().apply { color = Color.rgb(211, 47, 47); strokeWidth = 1.5f; textSize = 8f; isAntiAlias = true }
+            val red = Paint().apply {
+                color = Color.rgb(211, 47, 47); strokeWidth = 1.5f; textSize = 8f; typeface = label.typeface; isAntiAlias = true
+            }
             c.drawLine(x, top, x, top + height, red)
             c.drawText("MARKER ${CLOCK.format(RecordingFiles.instantOf(markerNs).atZone(zone))}", x + 3f, top + 9f, red)
         }
     }
+
+    private fun font(context: Context, asset: String, fallbackStyle: Int): Typeface =
+        runCatching { Typeface.createFromAsset(context.assets, asset) }
+            .getOrElse { Typeface.defaultFromStyle(fallbackStyle) }
 
     /** Splits [s] into lines no wider than [maxWidth] (by words). */
     private fun wrap(s: String, paint: Paint, maxWidth: Float): List<String> {

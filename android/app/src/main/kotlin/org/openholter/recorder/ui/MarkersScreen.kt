@@ -269,7 +269,7 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
             "Signal of the H10 chest strap as recorded (130 Hz, no extra filtering by the app). Grid: 0.2 s and 0.5 mV. " +
-                "The PDF uses standard ECG paper scale (25 mm/s, 10 mm/mV) with a 1 mV calibration pulse. " +
+                "The PDF uses standard ECG paper scale (25 mm/s, 10 mm/mV). " +
                 "Not a medical device; a doctor must read it.",
             style = MaterialTheme.typography.bodySmall,
         )

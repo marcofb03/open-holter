@@ -20,8 +20,9 @@ import kotlin.math.ceil
 /**
  * PDF of one symptom marker for a doctor: A4 landscape, standard ECG paper
  * scale (25 mm/s, 10 mm/mV, 1 mm / 5 mm grid), 10 s per row, 4 rows per page,
- * as many pages as the window needs, with a 1 mV calibration pulse before
- * every row. The signal is drawn as delivered by the H10 (no filtering here).
+ * as many pages as the window needs. The scale is stated in the header (the
+ * owner prefers rows without a drawn calibration pulse). The signal is drawn
+ * as delivered by the H10 (no filtering here).
  *
  * Text uses the bundled static Roboto 2.138 (assets/fonts, Apache 2.0): with
  * the phone's variable system font, Android's PDF writer embeds Type 3 fonts,
@@ -66,7 +67,7 @@ object MarkerPdf {
             add(
                 "ECG from $beforeS s before to $afterS s after the marker. Polar H10 chest strap, single lead, 130 Hz. " +
                     "Signal as delivered by the H10, no extra filtering by the app (the H10's internal filtering is " +
-                    "not documented by Polar). Scale 25 mm/s, 10 mm/mV; the pulse before each row is 1 mV." +
+                    "not documented by Polar). Scale 25 mm/s, 10 mm/mV." +
                     (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""),
             )
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
@@ -137,19 +138,6 @@ object MarkerPdf {
             color = Color.BLACK; style = Paint.Style.STROKE; strokeWidth = 0.7f
             isAntiAlias = true; strokeJoin = Paint.Join.ROUND
         }
-        // Standard calibration pulse in the margin: 1 mV (10 mm) high, 0.2 s (5 mm) wide.
-        val mm = PT_PER_MM
-        val pulse = Path().apply {
-            moveTo(left - 11 * mm, baseY)
-            lineTo(left - 9 * mm, baseY)
-            lineTo(left - 9 * mm, baseY - MM_PER_MV * mm)
-            lineTo(left - 4 * mm, baseY - MM_PER_MV * mm)
-            lineTo(left - 4 * mm, baseY)
-            lineTo(left - 2 * mm, baseY)
-        }
-        c.drawPath(pulse, ink)
-        c.drawText("1 mV", left - 11 * mm, baseY + 9f, label)
-
         val i0 = w.t.binarySearch(startNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(endNs).let { if (it < 0) -it - 1 else it }
         if (i1 > i0) {

@@ -35,7 +35,7 @@ directly.
   number of markers. Tap a day for its markers and comments, tap a marker for
   a report: the raw ECG from 60 s (or 30 s) before to 15 s after, ECG-paper
   grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
-  landscape at 25 mm/s and 10 mm/mV with a 1 mV calibration pulse per row, 10 s per row, as many pages as needed,
+  landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed,
   for a doctor (share sheet: e-mail, Drive, save to Files …).
 - **HR tab**: the H10's heart rate over a chosen day in 1-minute medians,
   07:00–24:00 by default, any range in half-hour steps. Times without skin

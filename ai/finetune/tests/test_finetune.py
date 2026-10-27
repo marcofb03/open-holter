@@ -251,3 +251,16 @@ def test_train_switches_to_valset_runs_on_and_rescores(tmp_path):
     assert "-> stop" not in r.stderr and '"reason": "max_epochs"' in (tmp_path / "run" / "DONE").read_text()
     r = subprocess.run(run + ["--eval", str(tmp_path / "run" / "best.pt")], capture_output=True, text=True, timeout=600)
     assert r.returncode == 0 and (tmp_path / "run" / "rescore.json").exists(), r.stderr[-1500:]
+
+
+def test_prep_extra_source_keeps_only_labelled_windows(monkeypatch):
+    import prep
+    import extra_sources as xs
+
+    fs = 250.0
+    x, _ = _ecg(fs, 330.0)
+    ref = xs._empty_ref(330.0) | {"alarm": {"t": 300.0, "target": "vt", "true": True}}
+    monkeypatch.setattr(xs, "read_patient", lambda *a: [("vtac", h10.raw16(x), fs, ref)])
+    pid, split, ex, sec, sec_read = prep.one_patient(("vtac", "r1", "train", None, "/tmp", 1))
+    assert len(ex["win_y"]) == 1 and ex["win_y"][0, h10.WINDOW_TARGETS.index("vt")] == 1
+    assert abs(ex["win_t"][0] - 290.0) < 1e-6 and len(ex["beat_y"]) == 0

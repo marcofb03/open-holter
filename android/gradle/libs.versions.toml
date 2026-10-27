@@ -3,7 +3,7 @@ agp = "8.13.0"
 kotlin = "2.2.20"
 coroutines = "1.10.2"
 # Official Polar BLE SDK, published via JitPack: https://github.com/polarofficial/polar-ble-sdk
-polarBleSdk = "8.4.0"
+polarBleSdk = "8.5.0"
 composeBom = "2025.08.00"
 activityCompose = "1.10.1"
 coreKtx = "1.16.0"

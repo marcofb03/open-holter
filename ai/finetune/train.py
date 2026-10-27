@@ -14,7 +14,14 @@ Train until the validation score stops improving (not for a fixed number of epoc
     (beat 10 = 2.5 epochs, windows 6 = 1.5 epochs: at least two LR reductions first),
     or at the cap --epochs (beat 25, windows 6), or before the 15-day scratch purge
     (--purge-days: stop that many days after the oldest shard was written);
-  * a short linear warm-up (--warmup-steps) starts every run.
+  * a short linear warm-up (--warmup-steps) starts every run;
+  * validation uses the fixed stratified set <shards>/valset_<kind>.h5 when it exists
+    (valset.py: every rare event of the val patients + a fixed random sample), and the
+    plateau rules and best.pt follow the mean of the last --val-smooth (3) scores, not one
+    noisy score; a resumed run whose validation set changed restarts its best/plateau
+    bookkeeping (the learning rate and weights carry on);
+  * --no-early-stop: never stop on a plateau, only at the cap or the purge deadline; the
+    learning rate still drops on plateaus but not below --min-lr-frac (1e-3) of its start.
 DONE records why the run stopped (plateau, max_epochs or purge_deadline).
 
 Resumable by design (cluster jobs are killed at their time limit):
@@ -62,6 +69,7 @@ sys.path[:0] = [str(HERE)]
 import h10  # noqa: E402
 import models  # noqa: E402
 import shards  # noqa: E402
+import valset  # noqa: E402
 
 DEFAULT_SOURCES = {"win": ["icentia11k", "ltafdb", "cpsc2021", "shdb-af", "ptb-xl", "cinc2017", "cpsc2020"],
                    "beat": ["icentia11k", "ltafdb", "cpsc2020"]}
@@ -226,6 +234,12 @@ def main() -> None:
     ap.add_argument("--lr-patience", type=int, default=None, help="validations; default 2 (windows), 4 (beat)")
     ap.add_argument("--stop-patience", type=int, default=None, help="validations; default 6 (windows), 10 (beat)")
     ap.add_argument("--min-delta", type=float, default=0.002)
+    ap.add_argument("--val-set", type=Path, default=None, help="default: <shards>/valset_<kind>.h5 if it exists")
+    ap.add_argument("--val-smooth", type=int, default=3, help="plateau and best.pt on the mean of the last N scores")
+    ap.add_argument("--no-early-stop", action="store_true", help="run to the cap or the purge deadline")
+    ap.add_argument("--min-lr-frac", type=float, default=1e-3)
+    ap.add_argument("--eval", type=Path, nargs="+", default=None,
+                    help="only score these checkpoints on the validation set (-> <run>/rescore.json)")
     ap.add_argument("--lr-factor", type=float, default=0.3)
     ap.add_argument("--warmup-steps", type=int, default=None, help="default: min(1000, 5 %% of an epoch)")
     ap.add_argument("--purge-days", type=float, default=14.0,
@@ -246,7 +260,7 @@ def main() -> None:
     if args.bf16 and args.device == "cpu" and "avx512_bf16" not in _cpu_flags():
         print("WARNING: --bf16 on a CPU without AVX-512 BF16 is emulated and ~35x slower "
               "(submit_chain.sh constrains bf16 jobs to Zen 4 nodes)", file=sys.stderr, flush=True)
-    if (args.run / "DONE").exists():
+    if (args.run / "DONE").exists() and not args.eval:
         print(f"{args.run}/DONE exists: nothing to do", file=sys.stderr)
         return
     name, kind = args.model, models.KIND[args.model]
@@ -262,14 +276,21 @@ def main() -> None:
     train_files = shard_files(args.shards, srcs, "train")
     train_s = shards.ChunkStream(train_files, kind, make_transform(name, args.conversion, noise), chunk=batch,
                                  seed=args.seed, threads=dthreads)
-    val_s = shards.ChunkStream(shard_files(args.shards, srcs, "val"), kind, make_transform(name, "fixed"),
-                               chunk=256, seed=12345, threads=dthreads)
+    vpath = args.val_set or args.shards / f"valset_{kind}.h5"
+    if vpath.exists():
+        val_s = valset.ValSet(vpath, kind, make_transform(name, "fixed"))
+        val_id = val_s.id
+    else:
+        val_s = shards.ChunkStream(shard_files(args.shards, srcs, "val"), kind, make_transform(name, "fixed"),
+                                   chunk=256, seed=12345, threads=dthreads)
+        val_id = "random-chunks"
     steps_per_epoch = len(train_s.index)
     total = max(int(math.ceil((args.epochs or (6 if win else 25)) * steps_per_epoch)), 1)
     val_steps = max(int(round(args.val_every * steps_per_epoch)), 1)
-    val_chunks = args.val_chunks or (100 if win else 200)
+    val_chunks = len(val_s.index) if val_id != "random-chunks" else (args.val_chunks or (100 if win else 200))
     warm = args.warmup_steps if args.warmup_steps is not None else min(1000, max(steps_per_epoch // 20, 1))
-    plateau = Plateau(args.lr_patience or (2 if win else 4), args.stop_patience or (6 if win else 10), args.min_delta)
+    stop_pat = 10**9 if args.no_early_stop else (args.stop_patience or (6 if win else 10))
+    plateau = Plateau(args.lr_patience or (2 if win else 4), stop_pat, args.min_delta)
     deadline = purge_deadline(train_files, args.purge_days)
     if deadline < math.inf:
         print(f"purge deadline: {time.strftime('%Y-%m-%d %H:%M', time.localtime(deadline))}", file=sys.stderr)
@@ -285,15 +306,32 @@ def main() -> None:
     lossf = (torch.nn.BCEWithLogitsLoss(pos_weight=w, reduction="none") if win
              else torch.nn.CrossEntropyLoss(weight=w))
 
-    step, best, log, next_val = 0, -1.0, [], val_steps
+    if args.eval:  # re-score saved checkpoints on the (new) validation set, nothing else
+        res = {}
+        for ckp in args.eval:
+            ck = torch.load(ckp, map_location=args.device, weights_only=True)
+            net.load_state_dict(ck["model"])
+            res[str(ckp)] = validate(net, name, val_s, val_chunks, args.bf16, lossf) | {"step": ck.get("step"), "val_id": val_id}
+            print(f"{ckp}: {json.dumps(res[str(ckp)])}", file=sys.stderr, flush=True)
+        (args.run / "rescore.json").write_text(json.dumps(res, indent=1))
+        return
+    step, best, log, next_val, recent = 0, -1.0, [], val_steps, []
     last = args.run / "last.pt"
     if last.exists():
         ck = torch.load(last, map_location=args.device, weights_only=True)
         net.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])  # includes the current (possibly reduced) learning rates
         train_s.load_state(ck["stream"])
-        plateau.load(ck["plateau"])
         step, best, log, next_val = ck["step"], ck["best"], ck.get("log", []), ck["next_val"]
+        if ck.get("val_id") == val_id:
+            plateau.load(ck["plateau"])
+            plateau.stop_patience = stop_pat
+            recent = ck.get("recent", [])
+        else:  # a new yardstick: earlier scores are not comparable
+            print(f"validation set changed ({ck.get('val_id', 'random-chunks')} -> {val_id}): best and plateau reset",
+                  file=sys.stderr)
+            best, plateau.reductions = -1.0, ck["plateau"].get("reductions", 0)
+            next_val = step + 1  # score the current weights on the new set right away
         print(f"resumed at step {step} (epoch {train_s.epoch}, chunk {train_s.pos}), lr {opt.param_groups[0]['lr']:.2e}, "
               f"best {best:.4f}, {plateau.bad} validations without gain", file=sys.stderr)
     print(f"{name}: {steps_per_epoch} steps per epoch, cap {total} steps, validation every {val_steps} steps on "
@@ -309,6 +347,7 @@ def main() -> None:
     def checkpoint():
         save(last, {"model": net.state_dict(), "opt": opt.state_dict(), "stream": train_s.state(), "step": step,
                     "best": best, "log": log, "next_val": next_val, "plateau": plateau.state(),
+                    "val_id": val_id, "recent": recent,
                     "args": vars(args) | {"shards": str(args.shards), "run": str(args.run)}})
 
     def finish(reason: str, v: dict | None) -> None:
@@ -322,16 +361,23 @@ def main() -> None:
     def run_validation() -> str:
         nonlocal best
         v = validate(net, name, val_s, val_chunks, args.bf16, lossf)
-        if v["score"] == v["score"] and v["score"] > best:
-            best = v["score"]
-            save(args.run / "best.pt", {"model": net.state_dict(), "step": step, "val": v, "model_name": name})
-        act = plateau.step(v["score"])
+        if v["score"] == v["score"]:
+            recent.append(float(v["score"]))
+        del recent[:-args.val_smooth]
+        v["smoothed"] = float(np.mean(recent)) if recent else float("nan")
+        v["val_id"] = val_id
+        if v["smoothed"] == v["smoothed"] and v["smoothed"] > best:
+            best = v["smoothed"]
+            save(args.run / "best.pt", {"model": net.state_dict(), "step": step, "val": v, "model_name": name,
+                                        "val_id": val_id})
+        act = plateau.step(v["smoothed"])
         if act == "reduce":
-            for g in opt.param_groups:
-                g["lr"] *= args.lr_factor
+            for g, b in zip(opt.param_groups, base_lr):
+                g["lr"] = max(g["lr"] * args.lr_factor, b * args.min_lr_frac)
         log.append({"step": step, "epoch": step / steps_per_epoch, "val": v, "action": act,
                     "lr": opt.param_groups[0]["lr"]})
-        print(f"val step {step} (epoch {step / steps_per_epoch:.2f}): score {v['score']:.4f} loss {v.get('loss', 0):.4f} "
+        print(f"val step {step} (epoch {step / steps_per_epoch:.2f}): score {v['score']:.4f} smoothed {v['smoothed']:.4f} "
+              f"loss {v.get('loss', 0):.4f} "
               f"-> {act}, lr {opt.param_groups[0]['lr']:.2e}, {plateau.bad} without gain | {json.dumps(v)}",
               file=sys.stderr, flush=True)
         return act

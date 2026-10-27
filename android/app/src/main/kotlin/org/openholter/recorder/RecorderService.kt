@@ -16,6 +16,7 @@ import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -50,7 +51,9 @@ import org.openholter.core.RecorderMachine.State
 import org.openholter.core.RecordingFiles
 import java.io.File
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.time.ZoneId
+import java.util.Locale
 
 /**
  * Foreground service (type `connectedDevice`) that owns the H10 connection and
@@ -170,7 +173,7 @@ class RecorderService : LifecycleService() {
                 prefs.paused = false
                 events.trySend(Event.Resume)
             }
-            ACTION_MARK -> mark()
+            ACTION_MARK -> mark(intent)
             ACTION_UPDATE -> lifecycleScope.launch(worker) { prepareUpdate(intent) }
             ACTION_UPDATE_FAILED -> {
                 prefs.updateFrom = null
@@ -193,19 +196,56 @@ class RecorderService : LifecycleService() {
         events.trySend(Event.Start(deviceId, paused))
     }
 
-    private fun mark() {
-        val now = RecordingFiles.nowNs()
+    /**
+     * A symptom press. It is always kept in the marker file (with an optional comment),
+     * also when no ECG is being recorded, and goes into the ECG file while recording.
+     * Presses from the notification get a follow-up notification to add a comment;
+     * the app's own button asks in a dialog instead.
+     */
+    private fun mark(intent: Intent?) {
+        val now = intent?.getLongExtra(EXTRA_TIME_NS, 0L)?.takeIf { it > 0 } ?: RecordingFiles.nowNs()
+        val fromApp = intent?.getBooleanExtra(EXTRA_FROM_APP, false) ?: false
+        runCatching { app.markers.add(now) }.onFailure { log("marker_error", it.toString()) }
         val writer = ecgWriter
-        if (writer == null) {
-            Log.w(TAG, "marker ignored: not recording")
-            return
-        }
-        writer.addMarker(now)
-        log("marker", "symptom marker")
-        val ms = now / 1_000_000
-        prefs.lastMarkerMs = ms
+        writer?.addMarker(now)
+        log("marker", if (writer != null) "symptom marker" else "symptom marker, no ECG being recorded", now)
+        prefs.lastMarkerMs = now / 1_000_000
         vibrate()
         publishStatus()
+        if (!fromApp) showCommentPrompt(now)
+    }
+
+    private fun showCommentPrompt(markerNs: Long) {
+        val time = TIME_FORMAT.format(RecordingFiles.instantOf(markerNs).atZone(zone))
+        val requestCode = (markerNs / 1_000_000 % Int.MAX_VALUE).toInt()
+        val target = Intent(this, MarkerCommentReceiver::class.java).putExtra(EXTRA_MARKER_NS, markerNs)
+        val reply = PendingIntent.getBroadcast(
+            this, requestCode, Intent(target).setAction(MarkerCommentReceiver.ACTION_COMMENT),
+            // Mutable: the system adds the typed text (RemoteInput).
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+        val skip = PendingIntent.getBroadcast(
+            this, requestCode + 1, Intent(target).setAction(MarkerCommentReceiver.ACTION_SKIP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val input = RemoteInput.Builder(MarkerCommentReceiver.KEY_COMMENT).setLabel("Comment (optional)").build()
+        val n = NotificationCompat.Builder(this, COMMENT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_heart)
+            .setContentTitle("Symptom marked at $time")
+            .setContentText("Add a comment if you like. It is optional.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setTimeoutAfter(COMMENT_PROMPT_TIMEOUT_MS)
+            .addAction(
+                NotificationCompat.Action.Builder(0, "Add comment", reply)
+                    .addRemoteInput(input)
+                    .setAllowGeneratedReplies(false)
+                    .build(),
+            )
+            .addAction(0, "No comment", skip)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(COMMENT_NOTIFICATION_ID, n)
     }
 
     /**
@@ -390,6 +430,7 @@ class RecorderService : LifecycleService() {
         accJob?.cancelAndJoin()
         ecgJob = null
         accJob = null
+        clearLivePreview()
         if (!hadStreams && quiet) return
         // Cancelling the flows already makes the SDK stop the measurement; the explicit
         // calls make sure, even if a flow had already failed.
@@ -398,6 +439,14 @@ class RecorderService : LifecycleService() {
         if (hadStreams) delay(STOP_GRACE_MS)
         ecgWriter?.flush()
         accWriter?.flush()
+    }
+
+    /** The live trace shows only ECG of the current stream, never beats from before a stop. */
+    private fun clearLivePreview() {
+        preview.clear()
+        lastEcgEventMs = 0L
+        RecorderHub.ecgPreview.value = FloatArray(0)
+        RecorderHub.lastEcgMs.value = null
     }
 
     private fun startHr(deviceId: String) {
@@ -436,6 +485,7 @@ class RecorderService : LifecycleService() {
             lastEcgEventMs = nowMs
             events.trySend(Event.EcgData)
             RecorderHub.ecgPreview.value = preview.snapshot()
+            RecorderHub.lastEcgMs.value = nowMs
         }
     }
 
@@ -475,7 +525,8 @@ class RecorderService : LifecycleService() {
         if (ecgWriter != null) return
         val root = Storage.root(this)
         ecgWriter = EcgCsvWriter(root, zone, onGap = { from, to ->
-            log("ecg_gap", "%.1f s without ECG since %d".format((to - from) / 1e9, from))
+            // Locale.ROOT: always a decimal point in the log, whatever the phone language.
+            log("ecg_gap", "%.1f s without ECG since %d".format(Locale.ROOT, (to - from) / 1e9, from))
         })
         accWriter = AccCsvWriter(root, zone)
         hrWriter = HrCsvWriter(root, zone)
@@ -499,9 +550,9 @@ class RecorderService : LifecycleService() {
         stopSelf()
     }
 
-    private fun log(event: String, detail: String = "") {
+    private fun log(event: String, detail: String = "", timestampNs: Long = RecordingFiles.nowNs()) {
         Log.i(TAG, "$event $detail")
-        if (::eventLog.isInitialized) runCatching { eventLog.log(RecordingFiles.nowNs(), event, detail) }
+        if (::eventLog.isInitialized) runCatching { eventLog.log(timestampNs, event, detail) }
     }
 
     // ---- status & notification -----------------------------------------------------------
@@ -559,6 +610,16 @@ class RecorderService : LifecycleService() {
                 setShowBadge(false)
             },
         )
+        // Pops up after "Mark symptom" in the notification to add a comment. The press
+        // already vibrated, so this one is silent.
+        nm.createNotificationChannel(
+            NotificationChannel(COMMENT_CHANNEL_ID, "Marker comment", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Asks for an optional comment after a symptom marker"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            },
+        )
     }
 
     private fun buildNotification(st: RecorderHub.Status): Notification {
@@ -568,7 +629,12 @@ class RecorderService : LifecycleService() {
         )
         val hours = "%.1f h today".format(st.todayRecordedSeconds / 3600.0)
         val title = when (st.link) {
-            RecorderHub.Link.STREAMING -> "Recording ECG" + (st.heartRate?.let { " · $it bpm" } ?: "")
+            RecorderHub.Link.STREAMING ->
+                if (RecorderHub.receivingEcg(st.link, RecorderHub.lastEcgMs.value, System.currentTimeMillis())) {
+                    "Recording ECG" + (st.heartRate?.let { " · $it bpm" } ?: "")
+                } else {
+                    "Starting ECG… (not recording yet)"
+                }
             RecorderHub.Link.CONNECTING -> "Waiting for H10…"
             RecorderHub.Link.CONNECTED -> "H10 connected, starting…"
             RecorderHub.Link.NO_CONTACT -> "No skin contact – strap off?"
@@ -628,6 +694,13 @@ class RecorderService : LifecycleService() {
         private const val TAG = "RecorderService"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
+        private const val COMMENT_CHANNEL_ID = "marker_comment"
+        const val COMMENT_NOTIFICATION_ID = 2
+        private const val COMMENT_PROMPT_TIMEOUT_MS = 15 * 60_000L
+        private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+        const val EXTRA_TIME_NS = "time_ns"
+        const val EXTRA_FROM_APP = "from_app"
+        const val EXTRA_MARKER_NS = "marker_ns"
         private const val STOP_GRACE_MS = 1_000L
         private const val UPDATE_TEARDOWN_MS = 2_500L
 
@@ -647,6 +720,13 @@ class RecorderService : LifecycleService() {
         fun send(context: Context, action: String, deviceId: String? = null) {
             val intent = Intent(context, RecorderService::class.java).setAction(action)
             if (deviceId != null) intent.putExtra(EXTRA_DEVICE_ID, deviceId)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** The app's MARK button: the tap time is the marker time; the app asks for the comment itself. */
+        fun sendMark(context: Context, timestampNs: Long) {
+            val intent = Intent(context, RecorderService::class.java).setAction(ACTION_MARK)
+                .putExtra(EXTRA_TIME_NS, timestampNs).putExtra(EXTRA_FROM_APP, true)
             ContextCompat.startForegroundService(context, intent)
         }
 

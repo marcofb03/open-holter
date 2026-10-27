@@ -195,3 +195,59 @@ def test_prep_repair_only_listed_patients(tmp_path, monkeypatch):
         assert sorted(json.loads(f.attrs["patients"])) == ["p1", "p3"]
     with pytest.raises(SystemExit):
         prep.run_task("icentia11k", 0, 1, tmp_path, tmp_path, 1, "benchmark", None, only=["nope"])
+
+
+def _beat_shards(root, rng):
+    import shards
+
+    fs = 250.0
+    for split, n in (("train", 4), ("val", 2)):
+        parts = []
+        for r in range(n):
+            x, beats = _ecg(fs, 120.0, hr=60 + 8 * r)
+            cls = ["N"] * len(beats)
+            for i in range(5, len(beats), 9):
+                cls[i] = "V" if i % 2 else "S"
+            ex = h10.examples("mitdb", h10.raw16(x + 0.02 * rng.standard_normal(len(x))), fs, _ref(beats, cls))
+            ex["win_pid"] = np.zeros(len(ex["win_y"]), np.int32)
+            ex["beat_pid"] = np.zeros(len(ex["beat_y"]), np.int32)
+            parts.append(ex)
+        shards.write_shard(root / "toy" / split / "task-0000-of-0001.h5", shards.concat(parts), {"fs": fs, "patients": ["p"]})
+
+
+def test_valset_keeps_every_rare_example(tmp_path):
+    pytest.importorskip("h5py")
+    import h5py
+    import valset
+
+    _beat_shards(tmp_path, np.random.default_rng(0))
+    out = valset.build("beat", tmp_path, n_rest=10)
+    with h5py.File(tmp_path / "toy" / "val" / "task-0000-of-0001.h5") as f:
+        y = f["beat_y"][:]
+    pos = valset.positives("beat", out)
+    assert pos["S"] == int((y == 1).sum()) and pos["V"] == int((y == 2).sum()) and pos["N"] == 10
+    vs = valset.ValSet(out, "beat", lambda x, y, fs, rng, **kw: (x, y))
+    assert sum(len(vs.read(k)[1]) for k in range(len(vs.index))) == sum(pos.values())
+
+
+def test_train_switches_to_valset_runs_on_and_rescores(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("h5py")
+    import subprocess
+    import valset
+
+    _beat_shards(tmp_path / "sh", np.random.default_rng(1))
+    run = [sys.executable, str(HERE / "train.py"), "--model", "beat", "--shards", str(tmp_path / "sh"),
+           "--run", str(tmp_path / "run"), "--sources", "toy", "--batch", "32", "--val-every", "0.5", "--val-chunks", "2",
+           "--warmup-steps", "2", "--data-threads", "1", "--threads", "2", "--purge-days", "0"]
+    r = subprocess.run(run + ["--epochs", "1"], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-1500:]
+    (tmp_path / "run" / "DONE").unlink()
+    valset.build("beat", tmp_path / "sh", n_rest=50)
+    r = subprocess.run(run + ["--epochs", "3", "--no-early-stop", "--lr-patience", "1"], capture_output=True, text=True,
+                       timeout=600)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert "validation set changed (random-chunks" in r.stderr and "smoothed" in r.stderr
+    assert "-> stop" not in r.stderr and '"reason": "max_epochs"' in (tmp_path / "run" / "DONE").read_text()
+    r = subprocess.run(run + ["--eval", str(tmp_path / "run" / "best.pt")], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0 and (tmp_path / "run" / "rescore.json").exists(), r.stderr[-1500:]

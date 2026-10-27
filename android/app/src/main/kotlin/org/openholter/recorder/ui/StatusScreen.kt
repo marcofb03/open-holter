@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -35,7 +36,9 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openholter.core.RecordingFiles
 import org.openholter.recorder.HolterApp
 import org.openholter.recorder.RecorderHub
 import org.openholter.recorder.RecorderHub.Link
@@ -54,6 +57,16 @@ fun StatusScreen(
     val prefs = HolterApp.from(context).prefs
     val status by RecorderHub.statusFlow.collectAsStateWithLifecycle()
     val ecg by RecorderHub.ecgPreview.collectAsStateWithLifecycle()
+    val lastEcgMs by RecorderHub.lastEcgMs.collectAsStateWithLifecycle()
+    // Ticks once a second so "Recording" turns into "Starting ECG…" as soon as data stops.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    val receivingEcg = RecorderHub.receivingEcg(status.link, lastEcgMs, nowMs)
     val update by Updater.state.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
 
@@ -61,6 +74,8 @@ fun StatusScreen(
     var batteryExempt by remember { mutableStateOf(true) }
     var storage by remember { mutableStateOf<Storage.Usage?>(null) }
     var justMarked by remember { mutableStateOf<Long?>(null) }
+    var commentFor by remember { mutableStateOf<Long?>(null) } // marker time (ns) waiting for a comment
+    val scope = rememberCoroutineScope()
 
     LifecycleResumeEffect(Unit) {
         recordingWanted = prefs.recordingActive
@@ -118,7 +133,7 @@ fun StatusScreen(
         }
 
         InfoCard("Connection") {
-            Text(linkText(status.link, recordingWanted), style = MaterialTheme.typography.headlineSmall)
+            Text(linkText(status.link, recordingWanted, receivingEcg), style = MaterialTheme.typography.headlineSmall)
             Text("H10: ${deviceId ?: "none chosen"}" + (status.batteryPercent?.let { " · battery $it%" } ?: ""))
             status.linkSinceMs?.let { if (recording) Text("since ${formatTime(it)}", style = MaterialTheme.typography.bodySmall) }
             if (status.link == Link.NO_CONTACT) {
@@ -132,16 +147,22 @@ fun StatusScreen(
         }
 
         InfoCard("Live ECG (last 10 s)") {
-            EcgTrace(if (status.link == Link.STREAMING) ecg else FloatArray(0), capacity = RecorderHub.PREVIEW_SAMPLES)
+            EcgTrace(if (receivingEcg) ecg else FloatArray(0), capacity = RecorderHub.PREVIEW_SAMPLES)
+            if (status.link == Link.STREAMING && !receivingEcg) {
+                Text("Waiting for the first ECG from the H10. Nothing is being recorded yet.", style = MaterialTheme.typography.bodySmall)
+            }
         }
 
         Button(
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                justMarked = System.currentTimeMillis()
-                RecorderService.send(context, RecorderService.ACTION_MARK)
+                val now = RecordingFiles.nowNs()
+                justMarked = now / 1_000_000
+                // Stored here too, so the press counts even if the service cannot start.
+                scope.launch { withContext(Dispatchers.IO) { runCatching { HolterApp.from(context).markers.add(now) } } }
+                RecorderService.sendMark(context, now)
+                commentFor = now
             },
-            enabled = recording,
             modifier = Modifier.fillMaxWidth().height(120.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
         ) {
@@ -184,13 +205,29 @@ fun StatusScreen(
         }
         Spacer(Modifier.height(8.dp))
     }
+
+    commentFor?.let { ts ->
+        CommentDialog(
+            title = "Symptom marked at ${formatTime(ts / 1_000_000)}",
+            initial = "",
+            confirmLabel = "Save",
+            dismissLabel = "No comment",
+            onSave = { text ->
+                commentFor = null
+                if (text.isNotBlank()) {
+                    scope.launch { withContext(Dispatchers.IO) { runCatching { HolterApp.from(context).markers.setComment(ts, text) } } }
+                }
+            },
+            onDismiss = { commentFor = null },
+        )
+    }
 }
 
-private fun linkText(link: Link, wanted: Boolean): String = when (link) {
+private fun linkText(link: Link, wanted: Boolean, receivingEcg: Boolean): String = when (link) {
     Link.IDLE -> if (wanted) "Starting…" else "Not recording"
     Link.CONNECTING -> "Searching for H10…"
     Link.CONNECTED -> "Connected, starting ECG…"
-    Link.STREAMING -> "Recording"
+    Link.STREAMING -> if (receivingEcg) "Recording" else "Starting ECG…"
     Link.NO_CONTACT -> "No skin contact"
     Link.PAUSED -> "Stopped – tap Start recording when the strap is on"
 }

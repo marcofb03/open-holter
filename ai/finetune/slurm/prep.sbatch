@@ -16,6 +16,8 @@ source "${REPO:-$HOME/open-holter}/ai/finetune/slurm/env.sh"
 # Concurrent downloads of this task: 8 workers x DL_THREADS (default 1), all through the ETH proxy.
 # PREP_OUT/PREP_ARGS are for the pilot (pilot_prep.sh): a --limit run must never write into $SHARDS,
 # or its partial shards would count as complete.
-exec python "$REPO/ai/finetune/prep.py" "$SOURCE" --task-id "$SLURM_ARRAY_TASK_ID" --n-tasks "$NTASKS" \
-    --out "${PREP_OUT:-$SHARDS}" --tmp "$TMPDIR" --workers "$SLURM_CPUS_PER_TASK" \
+# PREP_PY: ai/rhythm/prep_seg.py for the transformer's 60 s segments (submit_extra.sh); PREP_WORKERS: fewer
+# processes for sources with very long records (memory).
+exec python "${PREP_PY:-$REPO/ai/finetune/prep.py}" "$SOURCE" --task-id "$SLURM_ARRAY_TASK_ID" --n-tasks "$NTASKS" \
+    --out "${PREP_OUT:-$SHARDS}" --tmp "$TMPDIR" --workers "${PREP_WORKERS:-$SLURM_CPUS_PER_TASK}" \
     --dl-threads "${DL_THREADS:-1}" ${PREP_ARGS:-}

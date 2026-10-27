@@ -29,10 +29,12 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE)]
+sys.path[:0] = [str(HERE), str(HERE.parent / "rhythm")]
 import h10  # noqa: E402
 import shards  # noqa: E402
 import sources  # noqa: E402
+import extra_sources as xs  # noqa: E402  (the open sources added for the rhythm transformer)
+import seg  # noqa: E402  (record-level labels: statements, alarms, signal quality)
 
 SPLITS = ("train", "val", "test")
 VERSION = 1
@@ -41,6 +43,8 @@ VERSION = 1
 BUDGET = {
     "icentia11k": {"win_pos": 1500, "win_neg": 600, "beats": {0: 1500, 1: 1000, 2: 1000, 3: 500}},
     "default": {"win_pos": 4000, "win_neg": 1500, "beats": {0: 4000, 1: 3000, 2: 3000, 3: 1000}},
+    # the added sources are small next to Icentia11k: every labelled window and beat is kept
+    "extra": {"win_pos": 10**9, "win_neg": 10**9, "beats": {0: 10**9, 1: 10**9, 2: 10**9, 3: 10**9}},
 }
 
 
@@ -52,15 +56,22 @@ def one_patient(args: tuple) -> tuple[str, str, dict | None, float, float]:
     source, pid, split, payload, tmp, seed = args
     t0 = time.perf_counter()
     rng = np.random.default_rng(int(hashlib.sha256(f"{seed}:{source}:{pid}".encode()).hexdigest(), 16) % 2**32)
-    budget = BUDGET.get(source, BUDGET["default"])
+    extra = source in xs.SOURCES
+    budget = BUDGET["extra"] if extra else BUDGET.get(source, BUDGET["default"])
     parts, rates = [], set()
     try:
-        recs = sources.read_patient(source, pid, payload, Path(tmp))
+        recs = (xs.read_patient if extra else sources.read_patient)(source, pid, payload, Path(tmp))
         t_read = time.perf_counter() - t0
         for ns, x16, fs, ref in recs:
             rates.add(float(fs))
             ex = h10.examples(ns, x16, fs, ref)
-            ex["win_y"] = sources.labels_override(ns, ref, ex["win_y"])
+            if extra:  # same 10 s grid; statements / alarms / quality fill the targets they know
+                ex["win_y"] = seg.window_table(ns, ref, len(x16) / fs)[1][:, :len(h10.WINDOW_TARGETS)]
+                known = (ex["win_y"] >= 0).any(1)  # a window with no known target teaches nothing
+                for k in ("win_x", "win_y", "win_t"):
+                    ex[k] = ex[k][known]
+            else:
+                ex["win_y"] = sources.labels_override(ns, ref, ex["win_y"])
             parts.append(ex)
     except Exception as e:  # noqa: BLE001 - one bad patient must not kill a 4 h task
         print(f"  {source}/{pid}: FAILED {type(e).__name__}: {e}", file=sys.stderr, flush=True)
@@ -84,7 +95,7 @@ def run_task(source: str, i: int, n: int, out: Path, tmp: Path, workers: int, po
     if all(shards.is_complete(p) for p in paths.values()):
         print(f"{source} task {i}/{n}: already complete", file=sys.stderr)
         return
-    pts = sources.patients(source, policy)
+    pts = xs.patients(source) if source in xs.SOURCES else sources.patients(source, policy)
     if only:
         todo = [t for t in pts if t[0] in set(only)]
         missing = set(only) - {t[0] for t in todo}
@@ -151,7 +162,7 @@ def manifest(out: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("source", choices=list(sources.SOURCES) + ["noise", "manifest"])
+    ap.add_argument("source", choices=list(sources.SOURCES) + list(xs.SOURCES) + ["noise", "manifest"])
     ap.add_argument("--task-id", type=int, default=int(os.environ.get("SLURM_ARRAY_TASK_ID", 0)))
     ap.add_argument("--n-tasks", type=int, default=1)
     ap.add_argument("--out", type=Path, required=True)

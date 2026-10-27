@@ -42,3 +42,20 @@ jobs:
       - name: Test finetune (H10 conversion, augmentation, shards)
         working-directory: ai/finetune
         run: python -m pytest -q tests
+
+  rhythm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The rhythm transformer kit: parsers of the new sources, 60 s segments and their labels,
+      # and an end-to-end CPU run (pretraining, then fine-tuning) of a tiny model on synthetic shards.
+      - name: Install
+        run: |
+          pip install numpy scipy pytest h5py bottleneck wfdb pandas
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Test rhythm (readers, segments, model, trainer)
+        working-directory: ai/rhythm
+        run: python -m pytest -q tests

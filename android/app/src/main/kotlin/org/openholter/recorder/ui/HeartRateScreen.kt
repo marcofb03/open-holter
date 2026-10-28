@@ -177,9 +177,22 @@ fun HeartRateScreen() {
     }
 }
 
+/**
+ * Heart-rate chart: median per bin (line, broken at gaps longer than two bins
+ * or 2 min) with the bin's lowest and highest reading (band). Optional red
+ * lines for symptom markers. Also used by the training report.
+ */
 @Composable
-private fun HrChart(bins: List<HrBin>, fromNs: Long, toNs: Long, zone: ZoneId) {
-    val line = MaterialTheme.colorScheme.primary
+fun HrChart(
+    bins: List<HrBin>,
+    fromNs: Long,
+    toNs: Long,
+    zone: ZoneId,
+    binNs: Long = 60_000_000_000L,
+    markersNs: List<Long> = emptyList(),
+    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
+) {
+    val line = color
     val grid = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val measurer = rememberTextMeasurer()
@@ -193,12 +206,8 @@ private fun HrChart(bins: List<HrBin>, fromNs: Long, toNs: Long, zone: ZoneId) {
         hi = mid + 20
     }
     val step = if (hi - lo > 100) 20 else 10
-    val spanH = (toNs - fromNs) / 3.6e12
-    val tickH = when {
-        spanH <= 6 -> 1
-        spanH <= 12 -> 2
-        else -> 3
-    }
+    val spanMin = (toNs - fromNs) / 60e9
+    val tickMin = listOf(1, 2, 5, 10, 15, 30, 60, 120, 180, 240).firstOrNull { spanMin / it <= 8 } ?: 360
     Canvas(Modifier.fillMaxWidth().height(260.dp)) {
         val left = 34.dp.toPx()
         val bottom = 18.dp.toPx()
@@ -214,21 +223,23 @@ private fun HrChart(bins: List<HrBin>, fromNs: Long, toNs: Long, zone: ZoneId) {
             drawText(measurer, "$g", Offset(0f, y - 7.sp.toPx()), labelStyle)
             g += step
         }
-        // Full local hours, every tickH hours.
-        var tick = Instant.ofEpochSecond(fromNs / 1_000_000_000L).atZone(zone).withMinute(0).withSecond(0).withNano(0)
+        // Local clock times on multiples of tickMin minutes.
+        var tick = Instant.ofEpochSecond(fromNs / 1_000_000_000L).atZone(zone).withSecond(0).withNano(0)
+        val off = (tick.hour * 60 + tick.minute) % tickMin
+        if (off != 0) tick = tick.plusMinutes((tickMin - off).toLong())
         while (true) {
-            val i = tick.toInstant()
-            val t = i.epochSecond * 1_000_000_000L
+            val t = tick.toInstant().epochSecond * 1_000_000_000L
             if (t > toNs) break
-            if (t >= fromNs && tick.hour % tickH == 0) {
+            if (t >= fromNs) {
                 val x = xOf(t)
+                val label = if (tickMin >= 60) "%02d".format(tick.hour) else "%02d:%02d".format(tick.hour, tick.minute)
                 drawLine(grid, Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
-                drawText(measurer, "%02d".format(tick.hour), Offset(x - 6.sp.toPx(), h + 2.dp.toPx()), labelStyle)
+                drawText(measurer, label, Offset(x - (if (tickMin >= 60) 6 else 14).sp.toPx(), h + 2.dp.toPx()), labelStyle)
             }
-            tick = tick.plusHours(1)
+            tick = tick.plusMinutes(tickMin.toLong())
         }
 
-        val binW = maxOf(1f, w * 60e9.toFloat() / (toNs - fromNs))
+        val binW = maxOf(1f, w * binNs.toFloat() / (toNs - fromNs))
         val band = line.copy(alpha = 0.22f)
         for (b in bins) {
             val x = xOf(b.startNs) + binW / 2
@@ -242,10 +253,16 @@ private fun HrChart(bins: List<HrBin>, fromNs: Long, toNs: Long, zone: ZoneId) {
         for (b in bins) {
             val x = xOf(b.startNs) + binW / 2
             val y = yOf(b.median.coerceIn(lo, hi))
-            // A gap of more than 2 minutes (no data / no contact) breaks the line.
-            if (prev == Long.MIN_VALUE || b.startNs - prev > 120_000_000_000L) path.moveTo(x, y) else path.lineTo(x, y)
+            // A gap (no data / no skin contact) breaks the line.
+            if (prev == Long.MIN_VALUE || b.startNs - prev > maxOf(2 * binNs, 30_000_000_000L)) path.moveTo(x, y) else path.lineTo(x, y)
             prev = b.startNs
         }
         drawPath(path, line, style = Stroke(width = 2.dp.toPx()))
+        for (m in markersNs) {
+            if (m in fromNs..toNs) {
+                val x = xOf(m)
+                drawLine(androidx.compose.ui.graphics.Color(0xFFD32F2F), Offset(x, 0f), Offset(x, h), strokeWidth = 2.dp.toPx())
+            }
+        }
     }
 }

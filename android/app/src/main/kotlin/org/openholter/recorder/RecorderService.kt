@@ -174,6 +174,7 @@ class RecorderService : LifecycleService() {
                 events.trySend(Event.Resume)
             }
             ACTION_MARK -> mark(intent)
+            ACTION_LOG -> intent?.getStringExtra(EXTRA_EVENT)?.let { log(it, intent.getStringExtra(EXTRA_DETAIL).orEmpty()) }
             ACTION_UPDATE -> lifecycleScope.launch(worker) { prepareUpdate(intent) }
             ACTION_UPDATE_FAILED -> {
                 prefs.updateFrom = null
@@ -627,7 +628,8 @@ class RecorderService : LifecycleService() {
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
-        val hours = "%.1f h today".format(st.todayRecordedSeconds / 3600.0)
+        val hours = "%.1f h today".format(st.todayRecordedSeconds / 3600.0) +
+            (prefs.trainingStartNs.takeIf { it > 0 }?.let { " · training since " + TIME_FORMAT.format(RecordingFiles.instantOf(it).atZone(zone)) } ?: "")
         val title = when (st.link) {
             RecorderHub.Link.STREAMING ->
                 if (RecorderHub.receivingEcg(st.link, RecorderHub.lastEcgMs.value, System.currentTimeMillis())) {
@@ -711,6 +713,8 @@ class RecorderService : LifecycleService() {
         const val ACTION_MARK = "org.openholter.recorder.MARK"
         const val ACTION_RESTORE = "org.openholter.recorder.RESTORE"
         const val ACTION_UPDATE = "org.openholter.recorder.UPDATE"
+        const val ACTION_LOG = "org.openholter.recorder.LOG"
+        private const val EXTRA_EVENT = "event"
         const val ACTION_UPDATE_FAILED = "org.openholter.recorder.UPDATE_FAILED"
         const val EXTRA_DEVICE_ID = "device_id"
         private const val EXTRA_APK = "apk"
@@ -727,6 +731,13 @@ class RecorderService : LifecycleService() {
         fun sendMark(context: Context, timestampNs: Long) {
             val intent = Intent(context, RecorderService::class.java).setAction(ACTION_MARK)
                 .putExtra(EXTRA_TIME_NS, timestampNs).putExtra(EXTRA_FROM_APP, true)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** Writes a line to the event log of the running service (e.g. training_start). */
+        fun logEvent(context: Context, event: String, detail: String = "") {
+            val intent = Intent(context, RecorderService::class.java).setAction(ACTION_LOG)
+                .putExtra(EXTRA_EVENT, event).putExtra(EXTRA_DETAIL, detail)
             ContextCompat.startForegroundService(context, intent)
         }
 

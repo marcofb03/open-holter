@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -39,6 +40,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openholter.core.RecordingFiles
+import org.openholter.core.Training
 import org.openholter.recorder.HolterApp
 import org.openholter.recorder.RecorderHub
 import org.openholter.recorder.RecorderHub.Link
@@ -75,10 +77,13 @@ fun StatusScreen(
     var storage by remember { mutableStateOf<Storage.Usage?>(null) }
     var justMarked by remember { mutableStateOf<Long?>(null) }
     var commentFor by remember { mutableStateOf<Long?>(null) } // marker time (ns) waiting for a comment
+    var trainingStart by remember { mutableStateOf(prefs.trainingStartNs.takeIf { it > 0 }) }
+    var trainingToComment by remember { mutableStateOf<Training?>(null) }
     val scope = rememberCoroutineScope()
 
     LifecycleResumeEffect(Unit) {
         recordingWanted = prefs.recordingActive
+        trainingStart = prefs.trainingStartNs.takeIf { it > 0 }
         batteryExempt = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
         onPauseOrDispose { }
     }
@@ -197,6 +202,34 @@ fun StatusScreen(
             }
         }
 
+        // Training: start and end are kept (trainings_<day>.csv) and shown in the calendar.
+        Button(
+            onClick = {
+                val app = HolterApp.from(context)
+                val now = RecordingFiles.nowNs()
+                val start = trainingStart
+                if (start == null) {
+                    trainingStart = now
+                    prefs.trainingStartNs = now
+                    scope.launch { withContext(Dispatchers.IO) { runCatching { app.trainings.start(now) } } }
+                    if (status.serviceRunning) RecorderService.logEvent(context, "training_start")
+                } else {
+                    trainingStart = null
+                    prefs.trainingStartNs = 0L
+                    scope.launch { withContext(Dispatchers.IO) { runCatching { app.trainings.stop(start, now) } } }
+                    if (status.serviceRunning) {
+                        RecorderService.logEvent(context, "training_stop", formatElapsed((now - start) / 1_000_000))
+                    }
+                    trainingToComment = Training(start, now)
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = TRAINING_BLUE, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            val start = trainingStart
+            Text(if (start == null) "Start training" else "Stop training · ${formatElapsed(nowMs - start / 1_000_000)}")
+        }
+
         InfoCard("Recording") {
             Text("Today: %.1f h recorded".format(todaySeconds / 3600.0))
             Text("Last marker: ${lastMarker?.let { formatDateTime(it) } ?: "none"}")
@@ -204,6 +237,27 @@ fun StatusScreen(
             status.currentFile?.let { Text("Writing $it", style = MaterialTheme.typography.bodySmall) }
         }
         Spacer(Modifier.height(8.dp))
+    }
+
+    trainingToComment?.let { t ->
+        val end = t.endNs ?: t.startNs
+        CommentDialog(
+            title = "Training ${formatTime(t.startNs / 1_000_000)}–${formatTime(end / 1_000_000)} " +
+                "(${formatElapsed((end - t.startNs) / 1_000_000)})",
+            initial = "",
+            confirmLabel = "Save",
+            dismissLabel = "No comment",
+            placeholder = "e.g. tennis, stairs, meditation",
+            onSave = { text ->
+                trainingToComment = null
+                if (text.isNotBlank()) {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { runCatching { HolterApp.from(context).trainings.setComment(t.startNs, text) } }
+                    }
+                }
+            },
+            onDismiss = { trainingToComment = null },
+        )
     }
 
     commentFor?.let { ts ->

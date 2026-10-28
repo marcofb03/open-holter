@@ -35,6 +35,11 @@ class Prefs(context: Context) {
         get() = sp.getString("update_from", null)
         set(v) = sp.edit { putString("update_from", v) }
 
+    /** Start (Unix ns) of the running training, 0 when none runs. The training file is the record. */
+    var trainingStartNs: Long
+        get() = sp.getLong("training_start_ns", 0L)
+        set(v) = sp.edit { putLong("training_start_ns", v) }
+
     var exportTreeUri: String?
         get() = sp.getString("export_tree_uri", null)
         set(v) = sp.edit { putString("export_tree_uri", v) }

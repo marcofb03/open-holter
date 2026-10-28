@@ -65,8 +65,17 @@ fun formatTime(ms: Long): String = TIME.format(Instant.ofEpochMilli(ms).atZone(Z
 
 fun formatDateTime(ms: Long): String = DATE_TIME.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
+/** Colour of trainings (button, calendar, chart), next to the red of symptom markers. */
+val TRAINING_BLUE = androidx.compose.ui.graphics.Color(0xFF1565C0)
+
+/** "1:05:09" or "5:09". */
+fun formatElapsed(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+}
+
 /**
- * Optional comment for a symptom marker. [confirmLabel] saves (also an empty
+ * Optional comment for a symptom marker or a training. [confirmLabel] saves (also an empty
  * comment); [dismissLabel] closes without changing anything.
  */
 @Composable
@@ -77,6 +86,7 @@ fun CommentDialog(
     dismissLabel: String,
     onSave: (String) -> Unit,
     onDismiss: () -> Unit,
+    placeholder: String = "e.g. palpitations climbing stairs",
 ) {
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
@@ -86,7 +96,7 @@ fun CommentDialog(
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it.take(500) },
-                placeholder = { Text("e.g. palpitations climbing stairs") },
+                placeholder = { Text(placeholder) },
                 label = { Text("Comment (optional)") },
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth(),

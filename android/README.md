@@ -37,6 +37,16 @@ directly.
   grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
   landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed,
   for a doctor (share sheet: e-mail, Drive, save to Files …).
+- **Trainings**: a blue **Start training / Stop training** button under the
+  recording button (with the elapsed time; the notification shows it too).
+  Start and end go into `trainings_<day>.csv` at once, so a running training
+  survives a restart. At *Stop* a dialog asks for an optional comment
+  (*tennis*, *stairs*, *meditation* …), editable later. In the calendar,
+  training days are blue, and days with markers and trainings are half red,
+  half blue. A training's report shows the H10 heart rate over it (time on x,
+  bpm on y, skin contact only, markers as red lines) with two exports: a
+  one-page **summary PDF** (that chart and the numbers) or the **full ECG
+  PDF** (all of it at 25 mm/s, about 90 pages per hour, up to 3 h).
 - **HR tab**: the H10's heart rate over a chosen day in 1-minute medians,
   07:00–24:00 by default, any range in half-hour steps. Times without skin
   contact are left out.
@@ -159,6 +169,7 @@ in this column order and with these units:
 | `acc_*.csv` | `timestamp_ns,x_mG,y_mG,z_mG` | Unix ns, milli-g (integers) |
 | `hr_*.csv` | `timestamp_ns,hr_bpm,rr_ms,contact,contact_supported` | Unix ns, bpm, ms (may be empty), `0`/`1`, `0`/`1` |
 | `markers_<day>.csv` (daily) | `timestamp_ns,time_local,comment` | Unix ns of the press, local time, comment (always quoted, `"` doubled, may be empty) |
+| `trainings_<day>.csv` (day of the start) | `start_ns,end_ns,start_local,end_local,comment` | Unix ns (`end_ns` empty while running), local times, comment (quoted as above) |
 
 The headers are defined once, in `core/.../RecordingFiles.kt`, and the unit
 tests check them. Changing a column means changing the analysis loaders in
@@ -174,6 +185,7 @@ All files are in app-specific storage:
     hr_2026-10-21_14.csv       H10 heart rate, RR, skin contact
     events_2026-10-21.log      connection / pause / gap log
     markers_2026-10-21.csv     symptom markers with optional comment
+    trainings_2026-10-21.csv   training sessions: start, end, comment
 ```
 
 Files are split by the **local hour** of the data they contain. If the app
@@ -251,7 +263,7 @@ Main events: `start`, `stop`, `pause`, `resume`, `connected`, `disconnected`,
 `contact_back`, `ecg_gap`, `marker`, `h10_battery`, `h10_info` (model,
 firmware, hardware and software revision at each connect; ECG needs firmware
 3.0.35 or later), `bluetooth_off`/`_on`,
-`service_restart`, `update_start`, `update_installed`, `update_failed`, and
+`service_restart`, `training_start`, `training_stop`, `update_start`, `update_installed`, `update_failed`, and
 `*_error`.
 
 Storage needed: about 15 MB per hour of ECG, roughly 0.4–0.5 GB per day with
@@ -307,6 +319,10 @@ events log on the phone shows the same information.
         open it (2 pages for 60 s + 15 s, 25 mm/s when printed at 100 %).
 19. [ ] *HR* tab: today's curve from 07:00; change the day and the range;
         a time with the strap off shows a gap, not a line.
+20. [ ] *Start training*, wait a few minutes, *Stop training*: the comment
+        dialog opens; the day is blue (half red, half blue with a marker);
+        the training report shows the heart-rate chart; export the summary
+        PDF and the full ECG PDF.
 
 ## Build
 

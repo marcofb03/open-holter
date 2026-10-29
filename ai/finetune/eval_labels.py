@@ -218,7 +218,12 @@ def train_probe(emb: np.ndarray, y: np.ndarray, seed: int = 0):
             opt.step()
             sched.step()
     net.eval()
-    return lambda e: torch.sigmoid(net(torch.from_numpy(e).float())).detach().numpy()
+    predict = lambda e: torch.sigmoid(net(torch.from_numpy(e).float())).detach().numpy()
+    p = predict(emb)
+    fit = {t: (int((y[:, i] == 1).sum()), round(auroc(p[y[:, i] == 1, i], p[y[:, i] == 0, i]), 3))
+           for i, t in enumerate(h10.WINDOW_TARGETS)}
+    print(f"  probe: positives and AUROC on its own training windows {fit}", file=sys.stderr, flush=True)
+    return predict
 
 
 def beat_scores(systems: list, vpath: Path, limit: int | None) -> tuple[np.ndarray, dict]:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -264,3 +265,38 @@ def test_prep_extra_source_keeps_only_labelled_windows(monkeypatch):
     pid, split, ex, sec, sec_read = prep.one_patient(("vtac", "r1", "train", None, "/tmp", 1))
     assert len(ex["win_y"]) == 1 and ex["win_y"][0, h10.WINDOW_TARGETS.index("vt")] == 1
     assert abs(ex["win_t"][0] - 290.0) < 1e-6 and len(ex["beat_y"]) == 0
+
+
+def test_eval_labels_metrics_and_checkpoint_systems(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("h5py")
+    import subprocess
+
+    import eval_labels as E
+    import models
+    import torch
+    import valset
+
+    m = E.metrics(np.array([0.9, 0.8, 0.4]), np.array([0.1, 0.2, 0.3, 0.6]))
+    assert m["n_pos"] == 3 and abs(m["auroc"] - 11 / 12) < 1e-9
+    assert abs(m["tpr_at_0.5"] - 2 / 3) < 1e-9 and m["fpr_at_0.5"] == 0.25
+    s = np.full((4, len(h10.WINDOW_TARGETS)), np.nan)
+    s[:, 0] = [0.9, 0.1, 0.2, 0.8]
+    y = np.full((4, len(h10.WINDOW_TARGETS)), -1, np.int8)
+    y[:, 0] = [1, 0, 0, -1]
+    assert list(E.score_table("win", y, s)) == ["vt"] and E.score_table("win", y, s)["vt"]["n_neg"] == 2
+
+    sh = tmp_path / "sh"
+    _beat_shards(sh, np.random.default_rng(2))
+    valset.build("beat", sh, n_rest=20)
+    valset.build("win", sh, n_rest=5)
+    for name in ("beat", "clef"):
+        torch.save({"model": models.build(name, pretrained=False).state_dict()}, tmp_path / f"{name}.pt")
+    r = subprocess.run([sys.executable, str(HERE / "eval_labels.py"), "--shards", str(sh), "--out", str(tmp_path / "ev"),
+                        "--threads", "2", "--limit", "1", "--system", f"beat={tmp_path / 'beat.pt'}",
+                        f"clef@clef-x={tmp_path / 'clef.pt'}"], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-1500:]
+    res = json.loads((tmp_path / "ev" / "labels.json").read_text())
+    assert set(res["systems"]) == {"beat-finetuned", "clef-x"}
+    assert set(res["systems"]["beat-finetuned"]["labels"]) == {"V", "S", "noise"}
+    assert "noise" in res["systems"]["clef-x"]["labels"] and (tmp_path / "ev" / "clef-x.npz").exists()

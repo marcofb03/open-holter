@@ -125,3 +125,28 @@ def test_pretrain_then_finetune_end_to_end(tmp_path):
                         capture_output=True, text=True, timeout=600)
     assert r2.returncode == 0, r2.stderr[-2000:]
     assert "se_at_sp95" in r2.stderr and (tmp_path / "ft" / "DONE").exists()
+
+
+def test_iridia_reads_the_unpacked_release_folder(tmp_path, monkeypatch):
+    h5py = pytest.importorskip("h5py")
+    monkeypatch.setattr(xs, "LOCAL", tmp_path)
+    root = tmp_path / "iridia-af"
+    rec = root / "iridia-af-records-v1.0.1" / "record_000"  # the zip's own folder name, not records/
+    rec.mkdir(parents=True)
+    (root / "iridia-af-metadata-v1.0.1.csv").write_text("patient_id,record_id\npatient_000,record_000\n")
+    (rec / "record_000_ecg_labels.csv").write_text(
+        "start_datetime,start_file_index,start_qrs_index,end_datetime,end_file_index,end_qrs_index\n"
+        "x,0,2000,y,0,4000\n")
+    with h5py.File(rec / "record_000_ecg_00.h5", "w") as hf:
+        hf["ecg"] = np.zeros((6000, 3))
+    (pt, _, recs), = xs.patients("iridia-af")
+    out = xs.read_patient("iridia-af", pt, recs, tmp_path)
+    assert len(out) == 1 and out[0][2] == 200.0
+    assert out[0][3]["rhythm"] == [(10.0, 20.0, "AF")]
+
+
+def test_2015_records_list_next_to_training(tmp_path, monkeypatch):
+    monkeypatch.setattr(xs, "LOCAL", tmp_path)
+    (tmp_path / "challenge-2015" / "training").mkdir(parents=True)
+    (tmp_path / "challenge-2015" / "RECORDS").write_text("a103l\nv100s\n")
+    assert [p for p, _, _ in xs.patients("challenge-2015")] == ["a103l", "v100s"]

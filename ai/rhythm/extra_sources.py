@@ -73,6 +73,16 @@ def local(source: str) -> Path:
     return LOCAL / {"challenge-2015": "challenge-2015", "iridia-af": "iridia-af", "sph": "sph"}.get(source, source)
 
 
+def records_dir(source: str) -> Path:
+    """IRIDIA-AF / SPH record folder: `records/`, or the folder the release zip unpacks to
+    (IRIDIA-AF v1.0.1: `iridia-af-records-v1.0.1/`)."""
+    root = local(source)
+    if (root / "records").is_dir():
+        return root / "records"
+    found = sorted(p for p in root.glob(f"{source}-records*") if p.is_dir())
+    return found[-1] if found else root / "records"
+
+
 def _get(url: str) -> bytes:
     return fp._get(url, timeout=600)
 
@@ -131,7 +141,9 @@ def patients(source: str) -> list[tuple[str, str, object]]:
             split[r["record"]] = {"train": "train", "val": "val", "test": "test"}[r["split"]]
         return [(p, split[p], evs) for p, evs in sorted(by.items())]
     if source == "challenge-2015":
-        recs = (local(source) / "training" / "RECORDS").read_text().split()
+        # the RECORDS list sits in training/ or, depending on how the zip was unpacked, next to it
+        lst = local(source) / "training" / "RECORDS"
+        recs = (lst if lst.exists() else local(source) / "RECORDS").read_text().split()
         return [(r, _split(source, r), None) for r in recs]
     if source == "iridia-af":
         rows = list(csv.DictReader(io.StringIO(next(local(source).glob("iridia-af-metadata*.csv")).read_text())))
@@ -288,7 +300,7 @@ def read_patient(source: str, patient: str, payload, tmp: Path) -> list[tuple[st
 
             out = []
             for rec in payload:
-                folder = local(source) / "records" / rec
+                folder = records_dir(source) / rec
                 labels = list(csv.DictReader(io.StringIO(next(folder.glob("*ecg_labels.csv")).read_text())))
                 for k, f in enumerate(sorted(folder.glob("*_ecg_*.h5"))):
                     with h5py.File(f, "r") as hf:
@@ -311,7 +323,7 @@ def read_patient(source: str, patient: str, payload, tmp: Path) -> list[tuple[st
 
             out = []
             for ecg_id, aha in payload:
-                with h5py.File(local(source) / "records" / f"{ecg_id}.h5", "r") as hf:
+                with h5py.File(records_dir(source) / f"{ecg_id}.h5", "r") as hf:
                     a = np.asarray(hf[list(hf.keys())[0]][:], np.float64)
                 lead = a[1] if a.shape[0] == 12 else a[:, 1]  # lead II
                 fs = 500.0

@@ -46,7 +46,7 @@ def iridia() -> None:
         dst = root / f["key"]
         if f["key"].endswith(".csv"):
             curl(f["links"]["self"], dst)
-        elif not (root / "records").exists():
+        elif not xs.records_dir("iridia-af").exists():
             curl(f["links"]["self"], dst)
             with zipfile.ZipFile(dst) as z:
                 z.extractall(root)

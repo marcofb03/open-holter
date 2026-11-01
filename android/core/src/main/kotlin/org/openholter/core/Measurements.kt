@@ -101,6 +101,77 @@ object EcgSnap {
         return w.t[best]
     }
 
+    /** Default search half-width for [nearestExtremum]. */
+    const val EXTREMUM_RADIUS_NS = 150_000_000L
+
+    /** A top (local maximum) or bottom (local minimum) of the signal is the extreme within this. */
+    const val DOMINANCE_NS = 25_000_000L
+
+    /** A top or bottom of the signal. */
+    data class Extremum(val tNs: Long, val isMax: Boolean)
+
+    /**
+     * The top or bottom of a wave nearest to a tap at time [tNs] and height [tapMv], within
+     * [radiusNs]. "Nearest" is the distance on the screen: [nsPerPx] and [mvPerPx] convert
+     * time and voltage to pixels. Tops and bottoms are samples that are the highest (lowest)
+     * within [dominanceNs] around them, so small wiggles of noise do not count. Without any in
+     * range, the nearest sample is returned, as a top if it is above the tap.
+     */
+    fun nearestExtremum(
+        w: EcgWindow, tNs: Long, tapMv: Float, nsPerPx: Double, mvPerPx: Double,
+        radiusNs: Long = EXTREMUM_RADIUS_NS, dominanceNs: Long = DOMINANCE_NS,
+    ): Extremum? {
+        if (w.size == 0) return null
+        val i0 = w.t.binarySearch(tNs - radiusNs).let { if (it < 0) -it - 1 else it }
+        val i1 = w.t.binarySearch(tNs + radiusNs + 1).let { if (it < 0) -it - 1 else it }
+        var best: Extremum? = null
+        var bestDist = Double.MAX_VALUE
+        for (i in i0 until i1) {
+            val kind = kindAt(w, i, dominanceNs) ?: continue
+            val dx = (w.t[i] - tNs) / nsPerPx
+            val dy = (w.mv[i] - tapMv) / mvPerPx
+            val dist = dx * dx + dy * dy
+            if (dist < bestDist) {
+                bestDist = dist
+                best = Extremum(w.t[i], kind)
+            }
+        }
+        if (best != null) return best
+        val t = nearest(w, tNs) ?: return null
+        return Extremum(t, (valueAt(w, t) ?: tapMv) >= tapMv)
+    }
+
+    /** Whether the sample at [tNs] is a top (true), a bottom (false) or neither (null). */
+    fun kind(w: EcgWindow, tNs: Long, dominanceNs: Long = DOMINANCE_NS): Boolean? {
+        val i = w.t.binarySearch(tNs)
+        return if (i >= 0) kindAt(w, i, dominanceNs) else null
+    }
+
+    private fun kindAt(w: EcgWindow, i: Int, dominanceNs: Long): Boolean? {
+        val v = w.mv[i]
+        var isMax = true
+        var isMin = true
+        // Ties: only the first sample of a flat top or bottom counts, so equal noise wiggles are not extrema.
+        var j = i - 1
+        while (j >= 0 && w.t[i] - w.t[j] <= dominanceNs) {
+            if (w.mv[j] >= v) isMax = false
+            if (w.mv[j] <= v) isMin = false
+            j--
+        }
+        j = i + 1
+        while (j < w.size && w.t[j] - w.t[i] <= dominanceNs) {
+            if (w.mv[j] > v) isMax = false
+            if (w.mv[j] < v) isMin = false
+            j++
+        }
+        return when {
+            isMax && isMin -> null // isolated sample, no neighbours
+            isMax -> true
+            isMin -> false
+            else -> null
+        }
+    }
+
     /** Time of the sample nearest to [tNs]; null for an empty window. */
     fun nearest(w: EcgWindow, tNs: Long): Long? {
         if (w.size == 0) return null

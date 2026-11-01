@@ -4,6 +4,7 @@ import android.app.Application
 import com.polar.sdk.api.PolarBleApi
 import com.polar.sdk.api.PolarBleApiDefaultImpl
 import org.openholter.core.MarkerStore
+import org.openholter.core.MeasurementStore
 import org.openholter.core.TrainingStore
 import java.time.ZoneId
 
@@ -29,6 +30,9 @@ class HolterApp : Application() {
 
     /** Symptom markers and their comments, shared by the service, the receiver and the UI. */
     val markers: MarkerStore by lazy { MarkerStore(Storage.root(this), ZoneId.systemDefault()) }
+
+    /** Interval measurements drawn on marker reports. */
+    val measurements: MeasurementStore by lazy { MeasurementStore(Storage.root(this), ZoneId.systemDefault()) }
 
     /** Training sessions (start, end, comment). */
     val trainings: TrainingStore by lazy { TrainingStore(Storage.root(this), ZoneId.systemDefault()) }

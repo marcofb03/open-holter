@@ -35,7 +35,9 @@ directly.
   number of markers. Tap a day for its markers and comments, tap a marker for
   a report: the raw ECG from 60 s (or 30 s) before to 15 s after, ECG-paper
   grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
-  landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed,
+  landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed
+  (also *shifted*: every row moved by 5 s so the marker is mid-row, for beats
+  that fell on a row edge),
   for a doctor (share sheet: e-mail, Drive, save to Files …).
 - **Trainings**: a blue **Start training / Stop training** button under the
   recording button (with the elapsed time; the notification shows it too).

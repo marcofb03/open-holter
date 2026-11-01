@@ -387,17 +387,18 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
 
 /**
  * The ECG of [fromNs]..[toNs] in rows of [secondsPerRow] s on ECG paper, with the mV scale on
- * the left of each row and the marker as a red line. Rows are tall enough for the highest
- * and lowest point of the strip.
+ * the left of each row and the marker as a red line. Each row is as tall as its own highest
+ * and lowest point need.
  */
 @Composable
 private fun EcgStrip(w: EcgWindow, fromNs: Long, toNs: Long, markerNs: Long, zone: ZoneId, secondsPerRow: Int = 5) {
     val rowNs = secondsPerRow * 1_000_000_000L
     val rows = ceil((toNs - fromNs).toDouble() / rowNs).toInt()
-    val paper = remember(w, fromNs, toNs) { paperRows(w, fromNs, toNs, rowNs) }
     val measurer = rememberTextMeasurer()
     for (r in 0 until rows) {
         val a = fromNs + r * rowNs
+        // Each row as tall as its own signal; the same mV per dp in every row.
+        val paper = remember(w, a, rowNs) { paperRows(w, a, a + rowNs, rowNs) }
         Text(CLOCK.format(localTime(a, zone)), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
         Canvas(Modifier.fillMaxWidth().height((paper.spanMv * 32).dp)) {
             val row = drawPaperRow(w, a, rowNs, paper, gutter = 34.dp.toPx(), measurer = measurer)

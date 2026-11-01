@@ -63,12 +63,11 @@ import kotlin.math.ceil
 
 private val MEASURE_BLUE = Color(0xFF1565C0)
 private val MS_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
-private const val ROW_NS = 10_000_000_000L
 private val GUTTER = 34.dp
 
 /**
  * Measure intervals on the ECG of a marker: the same 10-s rows as the PDF (normal or
- * shifted by 5 s). Tap two points; each one snaps to the tip of the beat within 50 ms
+ * shifted by half a row), landscape (10-s rows) or portrait (7-s rows), each row as tall as its signal. Tap two points; each one snaps to the tip of the beat within 50 ms
  * (or stays where tapped in "free" mode) and a blue arrow shows the time between them in
  * ms and as a rate in bpm. Measurements are saved with the marker and go into
  * "Export PDF with my measurements".
@@ -84,6 +83,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
     var snapToPeak by remember { mutableStateOf(true) }
     var amplitudeMode by remember { mutableStateOf(false) } // tap = mV label instead of a time measurement
     var shifted by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(ReportPdf.Sheet.LANDSCAPE) }
     var zoom by remember { mutableIntStateOf(1) }
     var pending by remember { mutableStateOf<Long?>(null) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
@@ -99,10 +99,11 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         measurements = m
     }
 
-    val rowsFrom = if (shifted) fromNs - ReportPdf.HALF_ROW_NS else fromNs
-    val rowsTo = if (shifted) toNs + ReportPdf.HALF_ROW_NS else toNs
-    val rows = ceil((rowsTo - rowsFrom).toDouble() / ROW_NS).toInt()
-    val rowStartOf = { t: Long -> rowsFrom + Math.floorDiv(t - rowsFrom, ROW_NS) * ROW_NS }
+    val rowNs = sheet.rowNs
+    val rowsFrom = if (shifted) fromNs - sheet.halfRowNs else fromNs
+    val rowsTo = if (shifted) toNs + sheet.halfRowNs else toNs
+    val rows = ceil((rowsTo - rowsFrom).toDouble() / rowNs).toInt()
+    val rowStartOf = { t: Long -> rowsFrom + Math.floorDiv(t - rowsFrom, rowNs) * rowNs }
 
     /**
      * A tap at time [tNs] and height [tapMv]. With "Snap to peak" the point goes to the top or
@@ -160,8 +161,18 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterChip(selected = !shifted, onClick = { shifted = false }, label = { Text("Rows as PDF") })
-            FilterChip(selected = shifted, onClick = { shifted = true }, label = { Text("Shifted 5 s") })
+            FilterChip(selected = shifted, onClick = { shifted = true }, label = { Text("Shifted ½ row") })
             listOf(1, 2, 4).forEach { z -> FilterChip(selected = zoom == z, onClick = { zoom = z }, label = { Text("${z}×") }) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(
+                selected = sheet == ReportPdf.Sheet.LANDSCAPE, onClick = { sheet = ReportPdf.Sheet.LANDSCAPE; pending = null },
+                label = { Text("Landscape · 10-s rows") },
+            )
+            FilterChip(
+                selected = sheet == ReportPdf.Sheet.PORTRAIT, onClick = { sheet = ReportPdf.Sheet.PORTRAIT; pending = null },
+                label = { Text("Portrait · 7-s rows") },
+            )
         }
 
         val w = window
@@ -171,14 +182,15 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
             Text("No ECG was recorded around this marker.")
         } else {
             val measurer = rememberTextMeasurer()
-            val paper = remember(w, rowsFrom, rowsTo) { paperRows(w, rowsFrom, rowsTo, ROW_NS, extraTopMv = 0.8f) }
             val gutterPx = with(LocalDensity.current) { GUTTER.toPx() }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val rowWidth = maxWidth * zoom
                 Box(Modifier.horizontalScroll(rememberScrollState())) {
                     Column(Modifier.width(rowWidth)) {
                         for (r in 0 until rows) {
-                            val rowStart = rowsFrom + r * ROW_NS
+                            val rowStart = rowsFrom + r * rowNs
+                            // Each row as tall as its own signal; the same mV per dp in every row.
+                            val paper = remember(w, rowStart, rowNs) { paperRows(w, rowStart, rowStart + rowNs, rowNs, extraTopMv = 0.9f, extraBottomMv = 0.9f) }
                             Text(
                                 CLOCK_S.format(RecordingFiles.instantOf(rowStart).atZone(zone)),
                                 style = MaterialTheme.typography.labelSmall,
@@ -186,23 +198,23 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                             )
                             Canvas(
                                 Modifier.fillMaxWidth().height((paper.spanMv * 40).dp)
-                                    .pointerInput(rowStart, snapToPeak, amplitudeMode, pending, window, shifted, paper) {
+                                    .pointerInput(rowStart, rowNs, snapToPeak, amplitudeMode, pending, window, shifted, paper) {
                                         detectTapGestures { pos ->
                                             if (pos.x >= gutterPx) {
                                                 // Same geometry as drawPaperRow: time from x, mV from y.
                                                 val rowW = size.width - gutterPx
                                                 val pxPerMv = size.height / paper.spanMv
-                                                val median = EcgRows.median(w, rowStart, rowStart + ROW_NS) ?: 0f
+                                                val median = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
                                                 val tapMv = median + (paper.upMv * pxPerMv - pos.y) / pxPerMv
                                                 tap(
-                                                    rowStart + ((pos.x - gutterPx) / rowW * ROW_NS).toLong(), tapMv,
-                                                    nsPerPx = ROW_NS / rowW.toDouble(), mvPerPx = 1.0 / pxPerMv,
+                                                    rowStart + ((pos.x - gutterPx) / rowW * rowNs).toLong(), tapMv,
+                                                    nsPerPx = rowNs / rowW.toDouble(), mvPerPx = 1.0 / pxPerMv,
                                                 )
                                             }
                                         }
                                     },
                             ) {
-                                drawEcgRow(w, rowStart, paper, gutterPx, ts, measurements, pending, measurer)
+                                drawEcgRow(w, rowStart, rowNs, paper, gutterPx, ts, measurements, pending, measurer)
                             }
                         }
                     }
@@ -217,7 +229,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                         Column(Modifier.weight(1f)) {
                             if (m.isAmplitude) {
                                 val win = window
-                                val base = win?.let { EcgRows.median(it, rowStartOf(m.aNs), rowStartOf(m.aNs) + ROW_NS) }
+                                val base = win?.let { EcgRows.median(it, rowStartOf(m.aNs), rowStartOf(m.aNs) + rowNs) }
                                 val v = win?.let { EcgSnap.valueAt(it, m.aNs) }
                                 Text(
                                     "${i + 1}.  " + if (v != null && base != null) String.format(java.util.Locale.ROOT, "%+.2f mV", v - base) else "– mV",
@@ -247,7 +259,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                 exportMessage = "Making the PDF…"
                 scope.launch {
                     withContext(Dispatchers.IO) {
-                        runCatching { ReportPdf.marker(context, marker, win, rowsFrom, rowsTo, shifted, measurements) }
+                        runCatching { ReportPdf.marker(context, marker, win, rowsFrom, rowsTo, shifted, measurements, sheet) }
                     }.onSuccess {
                         exportMessage = null
                         context.startActivity(ReportPdf.shareIntent(context, it))
@@ -273,13 +285,13 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
 
 private val CLOCK_S: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
-/** One 10-s row: ECG paper with the mV scale, the signal, the marker, time measurements and mV labels. */
+/** One row: ECG paper with the mV scale, the signal, the marker, time measurements and mV labels. */
 private fun DrawScope.drawEcgRow(
-    w: EcgWindow, rowStart: Long, paper: PaperRows, gutter: Float, markerNs: Long, measurements: List<Measurement>,
+    w: EcgWindow, rowStart: Long, rowNs: Long, paper: PaperRows, gutter: Float, markerNs: Long, measurements: List<Measurement>,
     pending: Long?, measurer: androidx.compose.ui.text.TextMeasurer,
 ) {
-    val row = drawPaperRow(w, rowStart, ROW_NS, paper, gutter, measurer)
-    val rowEnd = rowStart + ROW_NS
+    val row = drawPaperRow(w, rowStart, rowNs, paper, gutter, measurer)
+    val rowEnd = rowStart + rowNs
     val width = size.width
     if (markerNs in rowStart until rowEnd) {
         val x = row.xOf(markerNs)

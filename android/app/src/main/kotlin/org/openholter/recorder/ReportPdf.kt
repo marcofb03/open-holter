@@ -27,9 +27,10 @@ import kotlin.math.floor
 
 /**
  * PDF reports for a doctor, A4 landscape:
- * - ECG: standard ECG paper scale (25 mm/s, 10 mm/mV, 1 mm / 5 mm grid), 10 s
- *   per row, 4 rows per page, as many pages as needed; symptom markers as red
- *   lines. The scale is stated in the header (the owner prefers rows without a
+ * - ECG: standard ECG paper scale (25 mm/s, 10 mm/mV, 1 mm / 5 mm grid), A4
+ *   landscape with 10-s rows or portrait with 7-s rows ([Sheet]); each row is as
+ *   tall as its own signal needs, so rows differ in height but never in scale;
+ *   as many pages as needed; symptom markers as red lines. The scale is stated in the header (the owner prefers rows without a
  *   drawn calibration pulse). The signal is drawn as delivered by the H10.
  * - Heart-rate summary of a training: one page, time on x, bpm on y.
  *
@@ -39,18 +40,33 @@ import kotlin.math.floor
  */
 object ReportPdf {
     private const val PT_PER_MM = 72f / 25.4f
-    private const val PAGE_W = 842 // A4 landscape in points
+    private const val PAGE_W = 842 // A4 landscape in points (heart-rate summary)
     private const val PAGE_H = 595
     private const val MM_PER_S = 25f
     private const val MM_PER_MV = 10f
-    private const val SECONDS_PER_ROW = 10
-    private const val ROWS_PER_PAGE = 4
+    private const val ROWS_PER_PAGE = 4 // only for the page estimate of a training ECG
     private const val ROW_GAP_PT = 16f
-    private const val TOP_PT = 112f
     private const val MARGIN = 40f
+    private const val FOOTER_ROOM_PT = 30f
 
-    /** Half an ECG row: the shifted marker PDF starts its rows this much earlier, so the marker is mid-row. */
-    const val HALF_ROW_NS = SECONDS_PER_ROW * 1_000_000_000L / 2
+    /**
+     * Page format of the ECG PDFs, both at 25 mm/s: A4 landscape fits 10-s rows (250 mm),
+     * A4 portrait 7-s rows (175 mm).
+     */
+    enum class Sheet(val pageW: Int, val pageH: Int, val rowSeconds: Int) {
+        LANDSCAPE(842, 595, 10),
+        PORTRAIT(595, 842, 7);
+
+        val rowNs: Long get() = rowSeconds * 1_000_000_000L
+
+        /** The shifted PDF starts its rows this much earlier, so the marker is mid-row. */
+        val halfRowNs: Long get() = rowNs / 2
+        val rowWidthPt: Float get() = rowSeconds * MM_PER_S * PT_PER_MM
+        val leftPt: Float get() = (pageW - rowWidthPt) / 2
+    }
+
+    /** Half a landscape row (5 s), for the shifted marker PDF. */
+    const val HALF_ROW_NS = 5_000_000_000L
 
     /** Longest ECG export (about 270 pages); longer trainings get the summary only. */
     const val MAX_ECG_NS = 3 * 3_600_000_000_000L
@@ -65,45 +81,39 @@ object ReportPdf {
             "mV scale left of each row: 0 is the row's baseline (median of its signal)."
     private const val FOOTER = "Recorded with open-holter (open source). Not a medical device, not for diagnosis on its own."
 
+    /** About how many landscape pages an ECG of this length takes (rows vary in height). */
     fun ecgPages(fromNs: Long, toNs: Long): Int =
-        maxOf(1, ceil(ceil((toNs - fromNs) / (SECONDS_PER_ROW * 1e9)) / ROWS_PER_PAGE).toInt())
+        maxOf(1, ceil(ceil((toNs - fromNs) / 10e9) / ROWS_PER_PAGE).toInt())
 
     /**
-     * Rows: [upMm] above and [downMm] below the baseline (multiples of 5 mm, so the baseline
-     * is on a thick grid line); always 10 mm/mV, so a taller signal gets taller rows and fewer
-     * rows per page.
+     * One row: [upMm] above and [downMm] below the baseline (multiples of 5 mm, so the baseline
+     * is on a thick grid line). Always 10 mm/mV: a row with a taller signal is a taller row.
      */
     private class RowLayout(val upMm: Float, val downMm: Float) {
         val rowMm: Float get() = upMm + downMm
         val heightPt: Float get() = rowMm * PT_PER_MM
-        val rowsPerPage: Int get() = maxOf(1, ((PAGE_H - 22f - TOP_PT) / (heightPt + ROW_GAP_PT)).toInt())
     }
 
-    /** The standard 35-mm row (2.0 mV up, 1.5 mV down), 4 rows per page; used for trainings. */
-    private val STANDARD_ROWS = RowLayout(20f, 15f)
-
     /**
-     * Rows tall enough that the highest and the lowest point of the whole strip stay inside
-     * the grid, plus room for the marker label and arrows on top and the bpm label below.
-     * A strip taller than one page is clipped at one row per page.
+     * A row tall enough for its own highest and lowest point, plus [extraTopMm] above (marker
+     * label, arrows) and [extraBottomMm] below (bpm label, mV labels); at most [maxMm].
      */
-    private fun fittedRows(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long, extraTopMm: Float): RowLayout {
-        val (up, down) = EcgRows.extent(w, fromNs, toNs, rowNs)
+    private fun rowLayout(w: EcgWindow, rowStart: Long, rowNs: Long, extraTopMm: Float, extraBottomMm: Float, maxMm: Float): RowLayout {
+        val (up, down) = EcgRows.extent(w, rowStart, rowStart + rowNs, rowNs)
         val round5 = { mm: Float -> (ceil(mm / 5.0) * 5).toFloat() }
-        var upMm = round5(up * MM_PER_MV + extraTopMm).coerceAtLeast(15f)
-        var downMm = round5(down * MM_PER_MV + 7f).coerceAtLeast(10f)
-        val maxMm = (floor((PAGE_H - 22f - TOP_PT - ROW_GAP_PT) / PT_PER_MM / 5.0) * 5).toFloat()
+        var upMm = round5(up * MM_PER_MV + extraTopMm).coerceAtLeast(10f)
+        var downMm = round5(down * MM_PER_MV + extraBottomMm).coerceAtLeast(5f)
         while (upMm + downMm > maxMm) if (upMm >= downMm) upMm -= 5f else downMm -= 5f
         return RowLayout(upMm, downMm)
     }
 
     /**
-     * [shifted]: the caller widened the window by [HALF_ROW_NS] on both sides, so every row is
-     * offset by 5 s and a beat at a row edge in the normal PDF is in the middle of a row here.
+     * [shifted]: the caller widened the window by half a row of [sheet] on both sides, so every
+     * row is offset by half a row and a beat at a row edge in the normal PDF is mid-row here.
      */
     fun marker(
         context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long,
-        shifted: Boolean = false, measurements: List<Measurement> = emptyList(),
+        shifted: Boolean = false, measurements: List<Measurement> = emptyList(), sheet: Sheet = Sheet.LANDSCAPE,
     ): File {
         val zone = ZoneId.systemDefault()
         val beforeS = (marker.timestampNs - fromNs) / 1_000_000_000L
@@ -111,7 +121,7 @@ object ReportPdf {
         val info = buildList {
             add(
                 "ECG from $beforeS s before to $afterS s after the marker" +
-                    (if (shifted) " (rows shifted by 5 s, so the marker is in the middle of its row)" else "") +
+                    (if (shifted) " (rows shifted by ${sheet.rowSeconds / 2.0} s, so the marker is in the middle of its row)" else "") +
                     ". $SIGNAL",
             )
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
@@ -120,9 +130,10 @@ object ReportPdf {
             context, "Symptom marker – ${DATE_TIME.format(local(marker.timestampNs, zone))} (${zone.id})",
             marker.comment, info, w, fromNs, toNs, listOf(marker.timestampNs),
             "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" +
-                (if (shifted) "_shifted" else "") + (if (measurements.isNotEmpty()) "_measured" else ""),
+                (if (shifted) "_shifted" else "") + (if (measurements.isNotEmpty()) "_measured" else "") +
+                (if (sheet == Sheet.PORTRAIT) "_portrait" else ""),
             measurements,
-            fitRows = true,
+            sheet,
         )
     }
 
@@ -154,7 +165,7 @@ object ReportPdf {
                 )
                 add(stats(bins, binNs, t.startNs, endNs))
             }
-            header(c, p, trainingTitle(t, endNs, zone), t.comment, info)
+            header(c, p, Sheet.LANDSCAPE, trainingTitle(t, endNs, zone), t.comment, info)
             drawHrChart(c, p, bins, binNs, t.startNs, endNs, markers, zone, left = 70f, top = 125f, right = PAGE_W - MARGIN, bottom = PAGE_H - 60f)
             c.drawText("$FOOTER   Page 1 of 1", MARGIN, PAGE_H - 18f, p.small)
             doc.finishPage(page)
@@ -195,44 +206,74 @@ object ReportPdf {
     private fun ecg(
         context: Context, title: String, comment: String, info: List<String>, w: EcgWindow,
         fromNs: Long, toNs: Long, markers: List<Long>, fileStem: String,
-        measurements: List<Measurement> = emptyList(), fitRows: Boolean = false,
+        measurements: List<Measurement> = emptyList(), sheet: Sheet = Sheet.LANDSCAPE,
     ): File {
         val zone = ZoneId.systemDefault()
         val p = paints(context)
-        val rowNs = SECONDS_PER_ROW * 1_000_000_000L
+        val rowNs = sheet.rowNs
         val rows = ceil((toNs - fromNs).toDouble() / rowNs).toInt()
-        val layout = if (fitRows) fittedRows(w, fromNs, toNs, rowNs, extraTopMm = if (measurements.isEmpty()) 5f else 9f) else STANDARD_ROWS
-        val perPage = layout.rowsPerPage
-        val pages = maxOf(1, ceil(rows.toDouble() / perPage).toInt())
         // H10 heart rate per row (bins aligned to the rows), for the "bpm" labels.
         val rowBpm = runCatching {
             SignalReaders.heartRate(Storage.root(context), zone, fromNs, fromNs + rows * rowNs, rowNs)
                 .associate { it.startNs to it.median }
         }.getOrDefault(emptyMap())
+        val rowsTop = headerBottom(p, sheet, comment, info) + 14f
+        val maxMm = (floor((sheet.pageH - FOOTER_ROOM_PT - rowsTop) / PT_PER_MM / 5.0) * 5).toFloat()
+
+        // Each row's own height, then rows packed onto pages as they fit.
+        val layouts = (0 until rows).map { r ->
+            val a = fromNs + r * rowNs
+            val b = a + rowNs
+            val hasMeasure = measurements.any { minOf(it.aNs, it.bNs) < b && maxOf(it.aNs, it.bNs) >= a }
+            val hasMarker = markers.any { it in a until b }
+            rowLayout(
+                w, a, rowNs,
+                extraTopMm = if (hasMeasure) 9f else 4f,
+                extraBottomMm = 2f + (if (r == 0 || hasMarker) 5f else 0f) + (if (hasMeasure) 5f else 0f),
+                maxMm = maxMm,
+            )
+        }
+        val pagesOfRows = mutableListOf<MutableList<Int>>()
+        var y = Float.MAX_VALUE
+        for (r in 0 until rows) {
+            val h = layouts[r].heightPt
+            if (pagesOfRows.isEmpty() || y + h > sheet.pageH - FOOTER_ROOM_PT) {
+                pagesOfRows += mutableListOf<Int>()
+                y = rowsTop
+            }
+            pagesOfRows.last() += r
+            y += h + ROW_GAP_PT
+        }
+        if (pagesOfRows.isEmpty()) pagesOfRows += mutableListOf<Int>()
+        val pages = pagesOfRows.size
+
         val doc = PdfDocument()
         try {
-            for (pg in 0 until pages) {
-                val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pg + 1).create())
+            for ((pg, rowsOnPage) in pagesOfRows.withIndex()) {
+                val page = doc.startPage(PdfDocument.PageInfo.Builder(sheet.pageW, sheet.pageH, pg + 1).create())
                 val c = page.canvas
-                header(c, p, title, comment, info, titleMaxW = SCALE_LEGEND_X - MARGIN - 10f)
-                scaleLegend(c, p.small)
-                for (k in 0 until perPage) {
-                    val r = pg * perPage + k
-                    if (r >= rows) break
-                    val top = TOP_PT + k * (layout.heightPt + ROW_GAP_PT)
+                header(c, p, sheet, title, comment, info)
+                scaleLegend(c, p.small, sheet)
+                var top = rowsTop
+                for (r in rowsOnPage) {
+                    val layout = layouts[r]
                     val rowStart = fromNs + r * rowNs
-                    drawRow(c, w, rowStart, top, layout, markers, zone, p.small, measurements)
+                    drawRow(c, w, sheet, rowStart, top, layout, markers, zone, p.small, measurements)
                     // bpm at the start of the strip (first row, left) and at the end of each
                     // row with a marker (right), inside the grid at the bottom, below the signal.
                     val bpm = "bpm: " + (rowBpm[rowStart]?.toString() ?: "–")
                     val bottom = top + layout.heightPt
-                    if (r == 0) rowLabel(c, bpm, bottom, p.small, right = false)
-                    if (markers.any { it in rowStart until rowStart + rowNs }) rowLabel(c, bpm, bottom, p.small, right = true)
+                    if (r == 0) rowLabel(c, sheet, bpm, bottom, p.small, right = false)
+                    if (markers.any { it in rowStart until rowStart + rowNs }) rowLabel(c, sheet, bpm, bottom, p.small, right = true)
+                    top += layout.heightPt + ROW_GAP_PT
                 }
-                c.drawText(
+                val footer = wrap(
                     "$FOOTER Print at 100 % (no \"fit to page\") to keep 25 mm/s and 10 mm/mV.   Page ${pg + 1} of $pages",
-                    MARGIN, PAGE_H - 18f, p.small,
+                    p.small, sheet.pageW - 2 * MARGIN,
                 )
+                footer.takeLast(2).forEachIndexed { i, line ->
+                    c.drawText(line, MARGIN, sheet.pageH - 18f - (footer.size.coerceAtMost(2) - 1 - i) * 9.5f, p.small)
+                }
                 doc.finishPage(page)
             }
             return save(context, doc, fileStem)
@@ -242,18 +283,18 @@ object ReportPdf {
     }
 
     private fun drawRow(
-        c: Canvas, w: EcgWindow, startNs: Long, top: Float, layout: RowLayout, markers: List<Long>, zone: ZoneId, label: Paint,
-        measurements: List<Measurement> = emptyList(),
+        c: Canvas, w: EcgWindow, sheet: Sheet, startNs: Long, top: Float, layout: RowLayout, markers: List<Long>, zone: ZoneId,
+        label: Paint, measurements: List<Measurement> = emptyList(),
     ) {
-        val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
-        val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
+        val left = sheet.leftPt
+        val width = sheet.rowWidthPt
         val height = layout.heightPt
-        val endNs = startNs + SECONDS_PER_ROW * 1_000_000_000L
+        val endNs = startNs + sheet.rowNs
         c.drawText(CLOCK.format(local(startNs, zone)), left, top - 3f, label)
 
         val minor = Paint().apply { color = Color.rgb(246, 201, 201); strokeWidth = 0.25f }
         val major = Paint().apply { color = Color.rgb(229, 154, 154); strokeWidth = 0.6f }
-        val mmX = (SECONDS_PER_ROW * MM_PER_S).toInt()
+        val mmX = (sheet.rowSeconds * MM_PER_S).toInt()
         for (i in 0..mmX) {
             val x = left + i * PT_PER_MM
             c.drawLine(x, top, x, top + height, if (i % 5 == 0) major else minor)
@@ -387,9 +428,9 @@ object ReportPdf {
     }
 
     /** A small label on a white patch at the bottom left or right inside an ECG row. */
-    private fun rowLabel(c: Canvas, text: String, bottom: Float, paint: Paint, right: Boolean) {
-        val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
-        val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
+    private fun rowLabel(c: Canvas, sheet: Sheet, text: String, bottom: Float, paint: Paint, right: Boolean) {
+        val left = sheet.leftPt
+        val width = sheet.rowWidthPt
         val tw = paint.measureText(text)
         val x = if (right) left + width - tw - 4f else left + 4f
         val bg = Paint().apply { color = Color.WHITE }
@@ -489,30 +530,38 @@ object ReportPdf {
         )
     }
 
-    /** Title, the comment (at most 2 lines) and the description (always shown), at most 5 lines in all. */
-    private fun header(c: Canvas, p: Paints, title: String, comment: String, info: List<String>, titleMaxW: Float = PAGE_W - 2 * MARGIN) {
-        val maxW = PAGE_W - 2 * MARGIN
+    /** The comment (at most 2 lines) and the description, wrapped to the page width (at most 7 lines). */
+    private fun headerLines(p: Paints, sheet: Sheet, comment: String, info: List<String>): List<String> {
+        val maxW = sheet.pageW - 2 * MARGIN
         val commentLines = wrap("Comment: " + comment.ifBlank { "(none)" }, p.text, maxW).let {
             if (it.size > 2) listOf(it[0], it[1].dropLast(1) + "…") else it
         }
-        val lines = commentLines + info.flatMap { wrap(it, p.text, maxW) }
-        // A long title gets a smaller font instead of running into the scale legend.
+        return (commentLines + info.flatMap { wrap(it, p.text, maxW) }).take(7)
+    }
+
+    /** Where the header text ends on the page (the rows start below it). */
+    private fun headerBottom(p: Paints, sheet: Sheet, comment: String, info: List<String>): Float =
+        56f + (headerLines(p, sheet, comment, info).size - 1) * 11.5f + 4f
+
+    /** Title (made smaller if it would run into the scale legend), comment and description. */
+    private fun header(c: Canvas, p: Paints, sheet: Sheet, title: String, comment: String, info: List<String>) {
+        val titleMaxW = sheet.pageW - MARGIN - LEGEND_W_PT - 10f - MARGIN
         val titlePaint = Paint(p.title)
         while (titlePaint.measureText(title) > titleMaxW && titlePaint.textSize > 9f) titlePaint.textSize -= 0.5f
         c.drawText(title, MARGIN, 40f, titlePaint)
-        lines.take(5).forEachIndexed { i, line -> c.drawText(line, MARGIN, 56f + i * 11.5f, p.text) }
+        headerLines(p, sheet, comment, info).forEachIndexed { i, line -> c.drawText(line, MARGIN, 56f + i * 11.5f, p.text) }
     }
 
-    /** Left edge of the scale legend in the top right corner of ECG pages. */
-    private const val SCALE_LEGEND_X = PAGE_W - MARGIN - 270f
+    /** Width of the scale legend in the top right corner of ECG pages. */
+    private const val LEGEND_W_PT = 160f
 
     /**
      * One large square of the grid (5 x 5 small squares) in the top right corner, with what it
      * measures: 25 mm/s gives 40 ms per mm, 10 mm/mV gives 0.1 mV per mm.
      */
-    private fun scaleLegend(c: Canvas, small: Paint) {
+    private fun scaleLegend(c: Canvas, small: Paint, sheet: Sheet) {
         val mm = PT_PER_MM
-        val x0 = SCALE_LEGEND_X
+        val x0 = sheet.pageW - MARGIN - LEGEND_W_PT
         val y0 = 16f
         val minor = Paint().apply { color = Color.rgb(246, 201, 201); strokeWidth = 0.25f }
         val major = Paint().apply { color = Color.rgb(229, 154, 154); strokeWidth = 0.6f }
@@ -521,11 +570,11 @@ object ReportPdf {
             c.drawLine(x0 + i * mm, y0, x0 + i * mm, y0 + 5 * mm, p)
             c.drawLine(x0, y0 + i * mm, x0 + 5 * mm, y0 + i * mm, p)
         }
-        val ink = Paint(small).apply { color = Color.BLACK }
-        val tx = x0 + 5 * mm + 6f
-        c.drawText("1 large square (5 × 5 small) = 200 ms wide, 0.5 mV high", tx, y0 + 6f, ink)
-        c.drawText("1 small square = 40 ms wide, 0.1 mV high", tx, y0 + 15f, ink)
-        c.drawText("(25 mm/s, 10 mm/mV)", tx, y0 + 24f, ink)
+        val ink = Paint(small).apply { color = Color.BLACK; textSize = 7f }
+        val tx = x0 + 5 * mm + 5f
+        c.drawText("1 small square = 40 ms · 0.1 mV", tx, y0 + 5f, ink)
+        c.drawText("1 large square = 200 ms · 0.5 mV", tx, y0 + 13f, ink)
+        c.drawText("(25 mm/s, 10 mm/mV)", tx, y0 + 21f, ink)
     }
 
     private fun trainingTitle(t: Training, endNs: Long, zone: ZoneId): String =

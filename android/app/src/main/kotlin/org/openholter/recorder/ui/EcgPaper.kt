@@ -26,14 +26,17 @@ class PaperRows(val upMv: Float, val downMv: Float) {
 }
 
 /**
- * Rows tall enough for the highest and lowest point of the strip (each row's signal is
- * drawn around its own baseline, the row median), with [extraTopMv] room above for labels.
+ * Rows tall enough for the highest and lowest point between [fromNs] and [toNs] (one row
+ * when the range is one row; each row's signal is drawn around its own baseline, the row
+ * median), with [extraTopMv] / [extraBottomMv] room for labels.
  */
-fun paperRows(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long, extraTopMv: Float = 0.4f): PaperRows {
+fun paperRows(
+    w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long, extraTopMv: Float = 0.4f, extraBottomMv: Float = 0.3f,
+): PaperRows {
     val (up, down) = EcgRows.extent(w, fromNs, toNs, rowNs)
     val half = { mv: Float -> (ceil(mv / 0.5) * 0.5).toFloat() }
-    var upMv = half(up + extraTopMv).coerceAtLeast(1.5f)
-    var downMv = half(down + 0.3f).coerceAtLeast(1.0f)
+    var upMv = half(up + extraTopMv).coerceAtLeast(1.0f)
+    var downMv = half(down + extraBottomMv).coerceAtLeast(0.5f)
     while (upMv + downMv > 8f) if (upMv >= downMv) upMv -= 0.5f else downMv -= 0.5f
     return PaperRows(upMv, downMv)
 }

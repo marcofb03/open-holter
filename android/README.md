@@ -37,13 +37,16 @@ directly.
   grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
   landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed
   (also *shifted*: every row moved by 5 s so the marker is mid-row, for beats
-  that fell on a row edge). The first row shows "bpm: …" bottom left and the
-  row with the marker "bpm: …" bottom right (H10 heart rate, median of the row);
+  that fell on a row edge). The first row shows "bpm: …" next to its time and the
+  row with the marker "bpm: …" at its right end (H10 heart rate, median of the row);
   a legend at the top right explains the grid (small square 40 ms × 0.1 mV).
-  Every row of a PDF (and of the strips in the app) is as tall as its own
-  highest and lowest point need, so rows differ in height but never in scale
-  (always 25 mm/s and 10 mm/mV) and no peak leaves the grid; rows are packed
-  onto the pages as they fit. An mV scale at the left of each row (0 = the
+  Every row of a PDF (and of the strips in the app) has a grid only as tall
+  as its own highest and lowest point, each rounded outwards to the next
+  0.5 mV (+2.37 / −1.67 mV gives +2.5 / −2.0 mV), so rows differ in height
+  but never in scale (always 25 mm/s and 10 mm/mV) and no peak leaves the
+  grid; time, bpm and the marker time are on a small line above each row, and
+  arrows and mV numbers in a strip just outside the grid (only on rows with
+  measurements); rows are packed onto the pages as tightly as they fit. An mV scale at the left of each row (0 = the
   row's baseline, its median) reads the height of any wave.
   **Personalize: measure intervals** opens the same rows in the app: tap two
   points (snapped to the top or bottom of the wave nearest to your finger,

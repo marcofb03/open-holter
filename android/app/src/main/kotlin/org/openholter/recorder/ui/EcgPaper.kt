@@ -26,17 +26,16 @@ class PaperRows(val upMv: Float, val downMv: Float) {
 }
 
 /**
- * Rows tall enough for the highest and lowest point between [fromNs] and [toNs] (one row
+ * The grid of a row from the highest and lowest point between [fromNs] and [toNs] (one row
  * when the range is one row; each row's signal is drawn around its own baseline, the row
- * median), with [extraTopMv] / [extraBottomMv] room for labels.
+ * median), each rounded outwards to the next 0.5 mV and no more (+2.37 / -1.67 mV gives
+ * +2.5 / -2.0). Labels go outside the grid (see [drawPaperRow]'s padding).
  */
-fun paperRows(
-    w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long, extraTopMv: Float = 0.4f, extraBottomMv: Float = 0.3f,
-): PaperRows {
+fun paperRows(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long): PaperRows {
     val (up, down) = EcgRows.extent(w, fromNs, toNs, rowNs)
-    val half = { mv: Float -> (ceil(mv / 0.5) * 0.5).toFloat() }
-    var upMv = half(up + extraTopMv).coerceAtLeast(1.0f)
-    var downMv = half(down + extraBottomMv).coerceAtLeast(0.5f)
+    val half = { mv: Float -> (ceil(mv / 0.5 - 1e-6) * 0.5).toFloat() }
+    var upMv = half(up).coerceAtLeast(0.5f)
+    var downMv = half(down).coerceAtLeast(0.5f)
     while (upMv + downMv > 8f) if (upMv >= downMv) upMv -= 0.5f else downMv -= 0.5f
     return PaperRows(upMv, downMv)
 }
@@ -58,21 +57,25 @@ class PaperRow(
 
 /**
  * One row of ECG paper: the mV scale in a gutter on the left (0 = the row's baseline), the
- * grid (0.2 s and 0.5 mV thick lines, 0.04 s fine lines), and the signal in black.
+ * grid (0.2 s and 0.5 mV thick lines, 0.04 s fine lines), and the signal in black. The grid
+ * fills the canvas except [padTop] / [padBottom] pixels kept free for labels.
  */
 fun DrawScope.drawPaperRow(
     w: EcgWindow, rowStart: Long, rowNs: Long, rows: PaperRows, gutter: Float, measurer: TextMeasurer,
+    padTop: Float = 0f, padBottom: Float = 0f,
 ): PaperRow {
     val width = size.width - gutter
-    val height = size.height
+    val gridTop = padTop
+    val gridBottom = size.height - padBottom
+    val height = gridBottom - gridTop
     val seconds = rowNs / 1e9f
     val pxPerS = width / seconds
     val pxPerMv = height / rows.spanMv
-    val baseY = rows.upMv * pxPerMv
+    val baseY = gridTop + rows.upMv * pxPerMv
     val median = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
     val row = PaperRow(rowStart, rowNs, gutter, pxPerS, pxPerMv, baseY, median)
 
-    drawRect(Color.White, topLeft = Offset(gutter, 0f), size = androidx.compose.ui.geometry.Size(width, height))
+    drawRect(Color.White, topLeft = Offset(gutter, gridTop), size = androidx.compose.ui.geometry.Size(width, height))
     // Fine vertical lines every 0.04 s only when they are at least 3 px apart.
     val fine = pxPerS * 0.04f >= 3f
     val steps = (seconds / 0.04f).toInt()
@@ -80,7 +83,7 @@ fun DrawScope.drawPaperRow(
         val major = k % 5 == 0
         if (!major && !fine) continue
         val x = gutter + k * 0.04f * pxPerS
-        drawLine(if (major) GRID_MAJOR else GRID_MINOR, Offset(x, 0f), Offset(x, height), strokeWidth = if (k % 25 == 0) 2f else 1f)
+        drawLine(if (major) GRID_MAJOR else GRID_MINOR, Offset(x, gridTop), Offset(x, gridBottom), strokeWidth = if (k % 25 == 0) 2f else 1f)
     }
     val label = TextStyle(fontSize = 9.sp, color = Color.Gray)
     var mv = -rows.downMv
@@ -89,7 +92,7 @@ fun DrawScope.drawPaperRow(
         drawLine(GRID_MAJOR, Offset(gutter, y), Offset(size.width, y), strokeWidth = 1f)
         val text = if (Math.abs(mv) < 1e-3f) "0 mV" else String.format(Locale.ROOT, "%+.1f", mv)
         val layout = measurer.measure(text, label)
-        drawText(layout, topLeft = Offset(gutter - layout.size.width - 3f, (y - layout.size.height / 2f).coerceIn(0f, height - layout.size.height)))
+        drawText(layout, topLeft = Offset(gutter - layout.size.width - 3f, (y - layout.size.height / 2f).coerceIn(0f, size.height - layout.size.height)))
         mv += 0.5f
     }
 

@@ -64,6 +64,7 @@ import kotlin.math.ceil
 private val MEASURE_BLUE = Color(0xFF1565C0)
 private val MS_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 private val GUTTER = 34.dp
+private val LABEL_PAD = 30.dp // room outside the grid for arrows and mV numbers
 
 /**
  * Measure intervals on the ECG of a marker: the same 10-s rows as the PDF (normal or
@@ -189,23 +190,31 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                     Column(Modifier.width(rowWidth)) {
                         for (r in 0 until rows) {
                             val rowStart = rowsFrom + r * rowNs
-                            // Each row as tall as its own signal; the same mV per dp in every row.
-                            val paper = remember(w, rowStart, rowNs) { paperRows(w, rowStart, rowStart + rowNs, rowNs, extraTopMv = 0.9f, extraBottomMv = 0.9f) }
+                            // Each row's grid only as tall as its own signal (0.5-mV steps), the same mV per dp
+                            // in every row; room for arrows and mV numbers outside the grid, only where needed.
+                            val paper = remember(w, rowStart, rowNs) { paperRows(w, rowStart, rowStart + rowNs, rowNs) }
+                            val inRow = measurements.filter { minOf(it.aNs, it.bNs) < rowStart + rowNs && maxOf(it.aNs, it.bNs) >= rowStart }
+                            val rowMedian = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
+                            val sides = inRow.filter { it.isAmplitude && it.aNs in rowStart until rowStart + rowNs }
+                                .map { m -> EcgSnap.kind(w, m.aNs) ?: ((EcgSnap.valueAt(w, m.aNs) ?: rowMedian) >= rowMedian) }
+                            val padTop = if (inRow.any { !it.isAmplitude } || sides.any { it }) LABEL_PAD else 0.dp
+                            val padBottom = if (sides.any { !it }) LABEL_PAD else 0.dp
+                            val padTopPx = with(LocalDensity.current) { padTop.toPx() }
+                            val padBottomPx = with(LocalDensity.current) { padBottom.toPx() }
                             Text(
                                 CLOCK_S.format(RecordingFiles.instantOf(rowStart).atZone(zone)),
                                 style = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                             Canvas(
-                                Modifier.fillMaxWidth().height((paper.spanMv * 40).dp)
-                                    .pointerInput(rowStart, rowNs, snapToPeak, amplitudeMode, pending, window, shifted, paper) {
+                                Modifier.fillMaxWidth().height((paper.spanMv * 40).dp + padTop + padBottom)
+                                    .pointerInput(rowStart, rowNs, snapToPeak, amplitudeMode, pending, window, shifted, paper, padTopPx, padBottomPx) {
                                         detectTapGestures { pos ->
                                             if (pos.x >= gutterPx) {
                                                 // Same geometry as drawPaperRow: time from x, mV from y.
                                                 val rowW = size.width - gutterPx
-                                                val pxPerMv = size.height / paper.spanMv
-                                                val median = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
-                                                val tapMv = median + (paper.upMv * pxPerMv - pos.y) / pxPerMv
+                                                val pxPerMv = (size.height - padTopPx - padBottomPx) / paper.spanMv
+                                                val tapMv = rowMedian + (padTopPx + paper.upMv * pxPerMv - pos.y) / pxPerMv
                                                 tap(
                                                     rowStart + ((pos.x - gutterPx) / rowW * rowNs).toLong(), tapMv,
                                                     nsPerPx = rowNs / rowW.toDouble(), mvPerPx = 1.0 / pxPerMv,
@@ -214,7 +223,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                                         }
                                     },
                             ) {
-                                drawEcgRow(w, rowStart, rowNs, paper, gutterPx, ts, measurements, pending, measurer)
+                                drawEcgRow(w, rowStart, rowNs, paper, gutterPx, padTopPx, padBottomPx, ts, measurements, pending, measurer)
                             }
                         }
                     }
@@ -287,15 +296,16 @@ private val CLOCK_S: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
 /** One row: ECG paper with the mV scale, the signal, the marker, time measurements and mV labels. */
 private fun DrawScope.drawEcgRow(
-    w: EcgWindow, rowStart: Long, rowNs: Long, paper: PaperRows, gutter: Float, markerNs: Long, measurements: List<Measurement>,
+    w: EcgWindow, rowStart: Long, rowNs: Long, paper: PaperRows, gutter: Float, padTop: Float, padBottom: Float,
+    markerNs: Long, measurements: List<Measurement>,
     pending: Long?, measurer: androidx.compose.ui.text.TextMeasurer,
 ) {
-    val row = drawPaperRow(w, rowStart, rowNs, paper, gutter, measurer)
+    val row = drawPaperRow(w, rowStart, rowNs, paper, gutter, measurer, padTop, padBottom)
     val rowEnd = rowStart + rowNs
     val width = size.width
     if (markerNs in rowStart until rowEnd) {
         val x = row.xOf(markerNs)
-        drawLine(Color(0xFFD32F2F), Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
+        drawLine(Color(0xFFD32F2F), Offset(x, padTop), Offset(x, size.height - padBottom), strokeWidth = 3f)
     }
     val yAt = { t: Long -> EcgSnap.valueAt(w, t)?.let { row.yOfMv(it) } ?: row.baseY }
     val label = TextStyle(fontSize = 11.sp, color = MEASURE_BLUE, background = Color.White)
@@ -312,7 +322,7 @@ private fun DrawScope.drawEcgRow(
         val xa = if (inA) row.xOf(a) else gutter
         val xb = if (inB) row.xOf(b) else width
         val ys = listOfNotNull(if (inA) yAt(a) else null, if (inB) yAt(b) else null)
-        val lineY = ((ys.minOrNull() ?: 40f) - 18f).coerceAtLeast(34f)
+        val lineY = ((ys.minOrNull() ?: 40f) - 18f).coerceAtLeast(40f)
         val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
         if (inA) drawLine(MEASURE_BLUE, Offset(xa, yAt(a)), Offset(xa, lineY), strokeWidth = 2f, pathEffect = dash)
         if (inB) drawLine(MEASURE_BLUE, Offset(xb, yAt(b)), Offset(xb, lineY), strokeWidth = 2f, pathEffect = dash)

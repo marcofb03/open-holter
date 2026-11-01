@@ -326,6 +326,29 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
             enabled = window != null,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Export PDF (for a doctor)") }
+        // Same report with every row moved by half a row (5 s): the marker sits in the middle of its
+        // row, and anything at a row edge in the normal PDF is mid-row here.
+        OutlinedButton(
+            onClick = {
+                exportMessage = "Making the PDF…"
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val from = fromNs - ReportPdf.HALF_ROW_NS
+                            val to = toNs + ReportPdf.HALF_ROW_NS
+                            val w = SignalReaders.ecg(Storage.root(context), zone, from, to)
+                            ReportPdf.marker(context, marker, w, from, to, hr, shifted = true)
+                        }
+                    }
+                    result.onSuccess {
+                        exportMessage = null
+                        context.startActivity(ReportPdf.shareIntent(context, it))
+                    }.onFailure { exportMessage = "Could not make the PDF: ${it.message}" }
+                }
+            },
+            enabled = window != null && exportMessage == null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Export PDF shifted (marker mid-row)") }
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
             "Signal of the H10 chest strap as recorded (130 Hz, no extra filtering by the app). Grid: 0.2 s and 0.5 mV. " +

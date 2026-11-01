@@ -46,6 +46,9 @@ object ReportPdf {
     private const val TOP_PT = 112f
     private const val MARGIN = 40f
 
+    /** Half an ECG row: the shifted marker PDF starts its rows this much earlier, so the marker is mid-row. */
+    const val HALF_ROW_NS = SECONDS_PER_ROW * 1_000_000_000L / 2
+
     /** Longest ECG export (about 270 pages); longer trainings get the summary only. */
     const val MAX_ECG_NS = 3 * 3_600_000_000_000L
 
@@ -60,18 +63,26 @@ object ReportPdf {
     fun ecgPages(fromNs: Long, toNs: Long): Int =
         maxOf(1, ceil(ceil((toNs - fromNs) / (SECONDS_PER_ROW * 1e9)) / ROWS_PER_PAGE).toInt())
 
-    fun marker(context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long, hrBpm: Int?): File {
+    /**
+     * [shifted]: the caller widened the window by [HALF_ROW_NS] on both sides, so every row is
+     * offset by 5 s and a beat at a row edge in the normal PDF is in the middle of a row here.
+     */
+    fun marker(context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long, hrBpm: Int?, shifted: Boolean = false): File {
         val zone = ZoneId.systemDefault()
         val beforeS = (marker.timestampNs - fromNs) / 1_000_000_000L
         val afterS = (toNs - marker.timestampNs) / 1_000_000_000L
         val info = buildList {
-            add("ECG from $beforeS s before to $afterS s after the marker. $SIGNAL" + (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""))
+            add(
+                "ECG from $beforeS s before to $afterS s after the marker" +
+                    (if (shifted) " (rows shifted by 5 s, so the marker is in the middle of its row)" else "") +
+                    ". $SIGNAL" + (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""),
+            )
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
         }
         return ecg(
             context, "Symptom marker – ${DATE_TIME.format(local(marker.timestampNs, zone))} (${zone.id})",
             marker.comment, info, w, fromNs, toNs, listOf(marker.timestampNs),
-            "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}",
+            "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" + if (shifted) "_shifted" else "",
         )
     }
 

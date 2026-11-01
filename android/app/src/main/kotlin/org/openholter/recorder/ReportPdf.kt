@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
+import org.openholter.core.EcgRows
 import org.openholter.core.EcgSnap
 import org.openholter.core.EcgWindow
 import org.openholter.core.HrBin
@@ -43,7 +44,6 @@ object ReportPdf {
     private const val MM_PER_S = 25f
     private const val MM_PER_MV = 10f
     private const val SECONDS_PER_ROW = 10
-    private const val ROW_MM = 35f
     private const val ROWS_PER_PAGE = 4
     private const val ROW_GAP_PT = 16f
     private const val TOP_PT = 112f
@@ -61,11 +61,41 @@ object ReportPdf {
     private const val SIGNAL =
         "Polar H10 chest strap, single lead, 130 Hz. Signal as delivered by the H10, no extra filtering by the app " +
             "(the H10's internal filtering is not documented by Polar). Scale 25 mm/s, 10 mm/mV. " +
-            "\"bpm\" in a row: H10 heart rate, median of that row's readings with skin contact."
+            "\"bpm\" in a row: H10 heart rate, median of that row's readings with skin contact. " +
+            "mV scale left of each row: 0 is the row's baseline (median of its signal)."
     private const val FOOTER = "Recorded with open-holter (open source). Not a medical device, not for diagnosis on its own."
 
     fun ecgPages(fromNs: Long, toNs: Long): Int =
         maxOf(1, ceil(ceil((toNs - fromNs) / (SECONDS_PER_ROW * 1e9)) / ROWS_PER_PAGE).toInt())
+
+    /**
+     * Rows: [upMm] above and [downMm] below the baseline (multiples of 5 mm, so the baseline
+     * is on a thick grid line); always 10 mm/mV, so a taller signal gets taller rows and fewer
+     * rows per page.
+     */
+    private class RowLayout(val upMm: Float, val downMm: Float) {
+        val rowMm: Float get() = upMm + downMm
+        val heightPt: Float get() = rowMm * PT_PER_MM
+        val rowsPerPage: Int get() = maxOf(1, ((PAGE_H - 22f - TOP_PT) / (heightPt + ROW_GAP_PT)).toInt())
+    }
+
+    /** The standard 35-mm row (2.0 mV up, 1.5 mV down), 4 rows per page; used for trainings. */
+    private val STANDARD_ROWS = RowLayout(20f, 15f)
+
+    /**
+     * Rows tall enough that the highest and the lowest point of the whole strip stay inside
+     * the grid, plus room for the marker label and arrows on top and the bpm label below.
+     * A strip taller than one page is clipped at one row per page.
+     */
+    private fun fittedRows(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long, extraTopMm: Float): RowLayout {
+        val (up, down) = EcgRows.extent(w, fromNs, toNs, rowNs)
+        val round5 = { mm: Float -> (ceil(mm / 5.0) * 5).toFloat() }
+        var upMm = round5(up * MM_PER_MV + extraTopMm).coerceAtLeast(15f)
+        var downMm = round5(down * MM_PER_MV + 7f).coerceAtLeast(10f)
+        val maxMm = (floor((PAGE_H - 22f - TOP_PT - ROW_GAP_PT) / PT_PER_MM / 5.0) * 5).toFloat()
+        while (upMm + downMm > maxMm) if (upMm >= downMm) upMm -= 5f else downMm -= 5f
+        return RowLayout(upMm, downMm)
+    }
 
     /**
      * [shifted]: the caller widened the window by [HALF_ROW_NS] on both sides, so every row is
@@ -92,6 +122,7 @@ object ReportPdf {
             "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" +
                 (if (shifted) "_shifted" else "") + (if (measurements.isNotEmpty()) "_measured" else ""),
             measurements,
+            fitRows = true,
         )
     }
 
@@ -164,13 +195,15 @@ object ReportPdf {
     private fun ecg(
         context: Context, title: String, comment: String, info: List<String>, w: EcgWindow,
         fromNs: Long, toNs: Long, markers: List<Long>, fileStem: String,
-        measurements: List<Measurement> = emptyList(),
+        measurements: List<Measurement> = emptyList(), fitRows: Boolean = false,
     ): File {
         val zone = ZoneId.systemDefault()
         val p = paints(context)
         val rowNs = SECONDS_PER_ROW * 1_000_000_000L
         val rows = ceil((toNs - fromNs).toDouble() / rowNs).toInt()
-        val pages = ecgPages(fromNs, toNs)
+        val layout = if (fitRows) fittedRows(w, fromNs, toNs, rowNs, extraTopMm = if (measurements.isEmpty()) 5f else 9f) else STANDARD_ROWS
+        val perPage = layout.rowsPerPage
+        val pages = maxOf(1, ceil(rows.toDouble() / perPage).toInt())
         // H10 heart rate per row (bins aligned to the rows), for the "bpm" labels.
         val rowBpm = runCatching {
             SignalReaders.heartRate(Storage.root(context), zone, fromNs, fromNs + rows * rowNs, rowNs)
@@ -183,17 +216,18 @@ object ReportPdf {
                 val c = page.canvas
                 header(c, p, title, comment, info, titleMaxW = SCALE_LEGEND_X - MARGIN - 10f)
                 scaleLegend(c, p.small)
-                for (k in 0 until ROWS_PER_PAGE) {
-                    val r = pg * ROWS_PER_PAGE + k
+                for (k in 0 until perPage) {
+                    val r = pg * perPage + k
                     if (r >= rows) break
-                    val top = TOP_PT + k * (ROW_MM * PT_PER_MM + ROW_GAP_PT)
+                    val top = TOP_PT + k * (layout.heightPt + ROW_GAP_PT)
                     val rowStart = fromNs + r * rowNs
-                    drawRow(c, w, rowStart, top, markers, zone, p.small, measurements)
+                    drawRow(c, w, rowStart, top, layout, markers, zone, p.small, measurements)
                     // bpm at the start of the strip (first row, left) and at the end of each
                     // row with a marker (right), inside the grid at the bottom, below the signal.
                     val bpm = "bpm: " + (rowBpm[rowStart]?.toString() ?: "–")
-                    if (r == 0) rowLabel(c, bpm, top, p.small, right = false)
-                    if (markers.any { it in rowStart until rowStart + rowNs }) rowLabel(c, bpm, top, p.small, right = true)
+                    val bottom = top + layout.heightPt
+                    if (r == 0) rowLabel(c, bpm, bottom, p.small, right = false)
+                    if (markers.any { it in rowStart until rowStart + rowNs }) rowLabel(c, bpm, bottom, p.small, right = true)
                 }
                 c.drawText(
                     "$FOOTER Print at 100 % (no \"fit to page\") to keep 25 mm/s and 10 mm/mV.   Page ${pg + 1} of $pages",
@@ -208,12 +242,12 @@ object ReportPdf {
     }
 
     private fun drawRow(
-        c: Canvas, w: EcgWindow, startNs: Long, top: Float, markers: List<Long>, zone: ZoneId, label: Paint,
+        c: Canvas, w: EcgWindow, startNs: Long, top: Float, layout: RowLayout, markers: List<Long>, zone: ZoneId, label: Paint,
         measurements: List<Measurement> = emptyList(),
     ) {
         val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
         val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
-        val height = ROW_MM * PT_PER_MM
+        val height = layout.heightPt
         val endNs = startNs + SECONDS_PER_ROW * 1_000_000_000L
         c.drawText(CLOCK.format(local(startNs, zone)), left, top - 3f, label)
 
@@ -224,12 +258,19 @@ object ReportPdf {
             val x = left + i * PT_PER_MM
             c.drawLine(x, top, x, top + height, if (i % 5 == 0) major else minor)
         }
-        for (i in 0..ROW_MM.toInt()) {
+        for (i in 0..layout.rowMm.toInt()) {
             val y = top + i * PT_PER_MM
             c.drawLine(left, y, left + width, y, if (i % 5 == 0) major else minor)
         }
+        // mV scale in the margin, at every thick line: 0 is the row's baseline.
+        val scale = Paint(label).apply { textSize = 6f; color = Color.GRAY; textAlign = Paint.Align.RIGHT }
+        for (i in 0..layout.rowMm.toInt() step 5) {
+            val mv = (layout.upMm - i) / MM_PER_MV
+            val text = if (Math.abs(mv) < 1e-3) "0 mV" else String.format(java.util.Locale.ROOT, "%+.1f", mv)
+            c.drawText(text, left - 3f, top + i * PT_PER_MM + 2f, scale)
+        }
 
-        val baseY = top + height * 0.6f // room for 2.1 mV up, 1.4 mV down
+        val baseY = top + layout.upMm * PT_PER_MM
         val i0 = w.t.binarySearch(startNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(endNs).let { if (it < 0) -it - 1 else it }
         val median = if (i1 > i0) w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2] else 0f
@@ -264,7 +305,42 @@ object ReportPdf {
         }
         val xOf = { t: Long -> left + (t - startNs) / 1e9f * MM_PER_S * PT_PER_MM }
         val yOf = { t: Long -> EcgSnap.valueAt(w, t)?.let { baseY - (it - median) * MM_PER_MV * PT_PER_MM } ?: baseY }
-        for (m in measurements) drawMeasurement(c, m, startNs, endNs, left, width, top, xOf, yOf, label)
+        for (m in measurements) {
+            if (m.isAmplitude) drawAmplitude(c, w, m.aNs, startNs, endNs, top, height, median, baseY, xOf, label)
+            else drawMeasurement(c, m, startNs, endNs, left, width, top, xOf, yOf, label)
+        }
+    }
+
+    /**
+     * The mV of one point (above or below the row's baseline) as a small black number next to
+     * the wave, never on the trace: above a positive wave, below a negative one, joined to the
+     * point by a short light dashed line.
+     */
+    private fun drawAmplitude(
+        c: Canvas, w: EcgWindow, tNs: Long, rowStart: Long, rowEnd: Long, top: Float, height: Float,
+        median: Float, baseY: Float, xOf: (Long) -> Float, label: Paint,
+    ) {
+        if (tNs !in rowStart until rowEnd) return
+        val v = EcgSnap.valueAt(w, tNs) ?: return
+        val d = v - median
+        val yOf = { mv: Float -> baseY - (mv - median) * MM_PER_MV * PT_PER_MM }
+        // The trace's extreme around the point, so the number stays clear of it.
+        val i0 = w.t.binarySearch(tNs - 60_000_000L).let { if (it < 0) -it - 1 else it }
+        val i1 = w.t.binarySearch(tNs + 60_000_001L).let { if (it < 0) -it - 1 else it }
+        var yExt = yOf(v)
+        for (i in i0 until i1) yExt = if (d >= 0) minOf(yExt, yOf(w.mv[i])) else maxOf(yExt, yOf(w.mv[i]))
+        val x = xOf(tNs)
+        val text = String.format(java.util.Locale.ROOT, "%+.2f mV", d)
+        val tp = Paint(label).apply { color = Color.BLACK; textSize = 6.5f }
+        val tw = tp.measureText(text)
+        val textY = if (d >= 0) (yExt - 5f).coerceAtLeast(top + 7f) else (yExt + 10f).coerceAtMost(top + height - 2f)
+        val lead = Paint().apply {
+            color = Color.argb(150, 0, 0, 0); strokeWidth = 0.4f; isAntiAlias = true
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(1.2f, 1.2f), 0f)
+        }
+        val leadEnd = if (d >= 0) textY + 1f else textY - 7f
+        c.drawLine(x, yOf(v) + if (d >= 0) -1.5f else 1.5f, x, leadEnd, lead)
+        c.drawText(text, x - tw / 2, textY, tp)
     }
 
     /**
@@ -306,10 +382,9 @@ object ReportPdf {
     }
 
     /** A small label on a white patch at the bottom left or right inside an ECG row. */
-    private fun rowLabel(c: Canvas, text: String, top: Float, paint: Paint, right: Boolean) {
+    private fun rowLabel(c: Canvas, text: String, bottom: Float, paint: Paint, right: Boolean) {
         val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
         val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
-        val bottom = top + ROW_MM * PT_PER_MM
         val tw = paint.measureText(text)
         val x = if (right) left + width - tw - 4f else left + 4f
         val bg = Paint().apply { color = Color.WHITE }

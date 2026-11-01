@@ -42,11 +42,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -388,60 +386,24 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
 }
 
 /**
- * The ECG of [fromNs]..[toNs] in rows of [secondsPerRow] s, ECG-paper style,
- * with the marker as a red line. The same vertical scale in every row
- * (3.5 mV per row, baseline at 60 % of the height).
+ * The ECG of [fromNs]..[toNs] in rows of [secondsPerRow] s on ECG paper, with the mV scale on
+ * the left of each row and the marker as a red line. Rows are tall enough for the highest
+ * and lowest point of the strip.
  */
 @Composable
 private fun EcgStrip(w: EcgWindow, fromNs: Long, toNs: Long, markerNs: Long, zone: ZoneId, secondsPerRow: Int = 5) {
     val rowNs = secondsPerRow * 1_000_000_000L
     val rows = ceil((toNs - fromNs).toDouble() / rowNs).toInt()
-    val minor = Color(0xFFF6C9C9)
-    val major = Color(0xFFE59A9A)
-    val ink = Color.Black // on white paper, also in dark mode
+    val paper = remember(w, fromNs, toNs) { paperRows(w, fromNs, toNs, rowNs) }
+    val measurer = rememberTextMeasurer()
     for (r in 0 until rows) {
         val a = fromNs + r * rowNs
-        val b = a + rowNs
-        val i0 = w.t.binarySearch(a).let { if (it < 0) -it - 1 else it }
-        val i1 = w.t.binarySearch(b).let { if (it < 0) -it - 1 else it }
         Text(CLOCK.format(localTime(a, zone)), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
-        Canvas(Modifier.fillMaxWidth().height(110.dp).background(Color.White)) {
-            val width = size.width
-            val height = size.height
-            val pxPerS = width / secondsPerRow
-            val pxPerMv = height / 3.5f
-            var s = 0f
-            var k = 0
-            while (s <= secondsPerRow + 1e-3f) {
-                val x = s * pxPerS
-                drawLine(if (k % 5 == 0) major else minor, Offset(x, 0f), Offset(x, height), strokeWidth = if (k % 5 == 0) 1.5f else 1f)
-                s += 0.2f
-                k++
-            }
-            val baseY = height * 0.6f
-            var mv = -2f
-            while (mv <= 2.5f) {
-                val y = baseY - mv * pxPerMv
-                if (y in 0f..height) drawLine(major, Offset(0f, y), Offset(width, y), strokeWidth = 1f)
-                mv += 0.5f
-            }
-            if (i1 > i0) {
-                val slice = w.mv.copyOfRange(i0, i1).sortedArray()
-                val median = slice[slice.size / 2]
-                val path = Path()
-                var prevT = Long.MIN_VALUE
-                for (i in i0 until i1) {
-                    val x = (w.t[i] - a) / 1e9f * pxPerS
-                    val y = baseY - (w.mv[i] - median) * pxPerMv
-                    // A gap of more than 50 ms is not bridged.
-                    if (prevT == Long.MIN_VALUE || w.t[i] - prevT > 50_000_000L) path.moveTo(x, y) else path.lineTo(x, y)
-                    prevT = w.t[i]
-                }
-                clipRect { drawPath(path, ink, style = Stroke(width = 1.6f)) }
-            }
-            if (markerNs in a until b) {
-                val x = (markerNs - a) / 1e9f * pxPerS
-                drawLine(MARKER_RED, Offset(x, 0f), Offset(x, height), strokeWidth = 3f)
+        Canvas(Modifier.fillMaxWidth().height((paper.spanMv * 32).dp)) {
+            val row = drawPaperRow(w, a, rowNs, paper, gutter = 34.dp.toPx(), measurer = measurer)
+            if (markerNs in a until a + rowNs) {
+                val x = row.xOf(markerNs)
+                drawLine(MARKER_RED, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
             }
         }
     }

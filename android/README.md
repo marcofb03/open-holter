@@ -40,9 +40,15 @@ directly.
   that fell on a row edge). The first row shows "bpm: …" bottom left and the
   row with the marker "bpm: …" bottom right (H10 heart rate, median of the row);
   a legend at the top right explains the grid (small square 40 ms × 0.1 mV).
+  The rows of a marker PDF (and of the strips in the app) are as tall as the
+  highest and lowest point of that strip needs, still at 10 mm/mV, so no peak
+  leaves the grid; an mV scale at the left of each row (0 = the row's
+  baseline, its median) reads the height of any wave.
   **Personalize: measure intervals** opens the same rows in the app: tap two
   points (snapped to the tip of the beat within 50 ms, or *free*), and a blue
-  arrow shows the time in ms and as bpm (60 000 ÷ ms); zoom 1–4×, normal or
+  arrow shows the time in ms and as bpm (60 000 ÷ ms); in *Amplitude (mV)*
+  mode a tap labels a wave with its mV above or below the baseline (small black
+  number and a light dashed line, never over the trace); zoom 1–4×, normal or
   shifted rows, delete; saved per marker (`measurements_<day>.csv`) and
   exported with *Export PDF with my measurements*,
   for a doctor (share sheet: e-mail, Drive, save to Files …).
@@ -178,7 +184,7 @@ in this column order and with these units:
 | `acc_*.csv` | `timestamp_ns,x_mG,y_mG,z_mG` | Unix ns, milli-g (integers) |
 | `hr_*.csv` | `timestamp_ns,hr_bpm,rr_ms,contact,contact_supported` | Unix ns, bpm, ms (may be empty), `0`/`1`, `0`/`1` |
 | `markers_<day>.csv` (daily) | `timestamp_ns,time_local,comment` | Unix ns of the press, local time, comment (always quoted, `"` doubled, may be empty) |
-| `measurements_<day>.csv` (day of the marker) | `marker_ns,a_ns,b_ns,interval_ms` | marker, the two measured points (Unix ns), interval for reading |
+| `measurements_<day>.csv` (day of the marker) | `marker_ns,a_ns,b_ns,interval_ms` | marker, the two measured points (Unix ns), interval for reading; `a_ns` = `b_ns` is an mV label on that sample |
 | `trainings_<day>.csv` (day of the start) | `start_ns,end_ns,start_local,end_local,comment` | Unix ns (`end_ns` empty while running), local times, comment (quoted as above) |
 
 The headers are defined once, in `core/.../RecordingFiles.kt`, and the unit

@@ -98,7 +98,7 @@ class MeasurementsTest {
         // with small noise wiggles of 0.05 mV around them.
         val n = 260
         val mv = FloatArray(n) { if (it % 2 == 0) 0.05f else 0f }
-        for (k in 55..59) mv[k] = 0.4f * (k - 54)
+        for (k in 55..59) mv[k] = 0.3f * (k - 54) // rising edge up to 1.5 mV, below the 2 mV tip
         mv[60] = 2f
         mv[61] = 1f; mv[62] = 0f; mv[63] = -0.5f; mv[64] = -0.8f; mv[65] = -0.4f; mv[66] = 0f
         val w = EcgWindow(LongArray(n) { t0 + it * step }, mv)

@@ -80,15 +80,15 @@ object ReportPdf {
         "Polar H10 chest strap, single lead, 130 Hz. Signal as delivered by the H10, no extra filtering by the app " +
             "(the H10's internal filtering is not documented by Polar). Scale 25 mm/s, 10 mm/mV. " +
             "\"bpm\" in a row: H10 heart rate, median of that row's readings with skin contact. " +
-            "mV scale left of each row: 0 is the row's baseline (median of its signal)."
+            "mV scale left of each row: raw values from the H10 (0 mV is the H10's own zero, the same in every row)."
 
     /** About how many landscape pages an ECG of this length takes (rows vary in height). */
     fun ecgPages(fromNs: Long, toNs: Long): Int =
         maxOf(1, ceil(ceil((toNs - fromNs) / 10e9) / ROWS_PER_PAGE).toInt())
 
     /**
-     * One row: a grid of [upMm] above and [downMm] below the baseline (multiples of 5 mm =
-     * 0.5 mV, so the baseline is on a thick line), at 10 mm/mV; [padTopPt] / [padBottomPt] of
+     * One row: a grid of [upMm] above and [downMm] below 0 mV (multiples of 5 mm =
+     * 0.5 mV, so 0 mV is on a thick line), at 10 mm/mV; [padTopPt] / [padBottomPt] of
      * room outside the grid for measurement arrows and mV numbers (0 on rows without them).
      */
     private class RowLayout(val upMm: Float, val downMm: Float, val padTopPt: Float, val padBottomPt: Float) {
@@ -230,7 +230,7 @@ object ReportPdf {
             val a = fromNs + r * rowNs
             val b = a + rowNs
             val inRow = measurements.filter { minOf(it.aNs, it.bNs) < b && maxOf(it.aNs, it.bNs) >= a }
-            val median = EcgRows.median(w, a, b) ?: 0f
+            val median = 0f // raw values: 0 mV is the H10's zero
             // mV numbers go above a top and below a bottom (as drawAmplitude does).
             val sides = inRow.filter { it.isAmplitude && it.aNs in a until b }
                 .map { m -> EcgSnap.kind(w, m.aNs) ?: ((EcgSnap.valueAt(w, m.aNs) ?: median) >= median) }
@@ -323,7 +323,7 @@ object ReportPdf {
             val y = top + i * PT_PER_MM
             c.drawLine(left, y, left + width, y, if (i % 5 == 0) major else minor)
         }
-        // mV scale in the margin, at every thick line: 0 is the row's baseline.
+        // mV scale in the margin, at every thick line: 0 is 0 mV (the H10's zero).
         val scale = Paint(label).apply { textSize = 6f; color = Color.GRAY; textAlign = Paint.Align.RIGHT }
         for (i in 0..layout.rowMm.toInt() step 5) {
             val mv = (layout.upMm - i) / MM_PER_MV
@@ -334,7 +334,7 @@ object ReportPdf {
         val baseY = top + layout.upMm * PT_PER_MM
         val i0 = w.t.binarySearch(startNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(endNs).let { if (it < 0) -it - 1 else it }
-        val median = if (i1 > i0) w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2] else 0f
+        val median = 0f // raw values: 0 mV is the H10's zero in every row (no baseline subtracted)
         if (i1 > i0) {
             val path = Path()
             var prev = Long.MIN_VALUE
@@ -373,9 +373,9 @@ object ReportPdf {
     }
 
     /**
-     * The mV of one point (above or below the row's baseline) as a small black number next to
+     * The mV of one point (above or below 0 mV (the H10's zero)) as a small black number next to
      * the wave, never on the trace: above a top, below a bottom (a freely placed point: above if
-     * above the baseline), with a light dashed line from just above (or under) the point to it.
+     * above 0 mV), with a light dashed line from just above (or under) the point to it.
      */
     private fun drawAmplitude(
         c: Canvas, w: EcgWindow, tNs: Long, rowStart: Long, rowEnd: Long, roomTop: Float, roomBottom: Float,

@@ -6,7 +6,7 @@ import java.time.ZoneId
 /**
  * A time measurement between two ECG samples (Unix ns), drawn by the owner on a marker
  * report. With [aNs] == [bNs] it is an amplitude label: the mV of that sample above or
- * below its row's baseline.
+ * below 0 mV (the H10's zero).
  */
 data class Measurement(val aNs: Long, val bNs: Long) {
     val isAmplitude: Boolean get() = aNs == bNs
@@ -194,7 +194,7 @@ object EcgSnap {
 
 /** Rows of an ECG strip (10 s on paper, 5 s on the phone): baseline and how far the signal reaches. */
 object EcgRows {
-    /** Median of the samples with [fromNs] <= t < [toNs] (the row's baseline, 0 mV on its scale), or null. */
+    /** Median of the samples with [fromNs] <= t < [toNs] (0 mV (the H10's zero), 0 mV on its scale), or null. */
     fun median(w: EcgWindow, fromNs: Long, toNs: Long): Float? {
         val i0 = w.t.binarySearch(fromNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(toNs).let { if (it < 0) -it - 1 else it }
@@ -203,8 +203,8 @@ object EcgRows {
     }
 
     /**
-     * How far the signal goes above (`first`) and below (`second`, positive number) its
-     * row's baseline, over all rows of [rowNs] from [fromNs] to [toNs], in mV.
+     * How far the raw signal goes above (`first`) and below (`second`, positive number)
+     * 0 mV (the H10's own zero, no baseline subtracted) from [fromNs] to [toNs], in mV.
      */
     fun extent(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long): Pair<Float, Float> {
         var up = 0f
@@ -212,8 +212,8 @@ object EcgRows {
         var a = fromNs
         while (a < toNs) {
             val b = a + rowNs
-            val base = median(w, a, b)
-            if (base != null) {
+            val base = 0f // raw values: the owner wants the H10's 0 mV in every row, comparable
+            run {
                 val i0 = w.t.binarySearch(a).let { if (it < 0) -it - 1 else it }
                 val i1 = w.t.binarySearch(b).let { if (it < 0) -it - 1 else it }
                 for (i in i0 until i1) {

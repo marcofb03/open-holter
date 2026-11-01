@@ -261,6 +261,7 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
     var hr by remember { mutableStateOf<Int?>(null) }
     var editing by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
+    var personalizing by remember { mutableStateOf(false) }
     val ts = marker.timestampNs
     val fromNs = ts - beforeS * 1_000_000_000L
     val toNs = ts + MARKER_AFTER_S * 1_000_000_000L
@@ -274,6 +275,11 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
             SignalReaders.heartRate(root, zone, ts - 10_000_000_000L, ts + 10_000_000_000L, binNs = 20_000_000_000L)
                 .firstOrNull()?.median
         }
+    }
+
+    if (personalizing) {
+        PersonalizeScreen(marker, fromNs, toNs, hr, onBack = { personalizing = false })
+        return
     }
 
     Column(
@@ -349,6 +355,11 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
             enabled = window != null && exportMessage == null,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Export PDF shifted (marker mid-row)") }
+        OutlinedButton(
+            onClick = { personalizing = true },
+            enabled = window != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Personalize: measure intervals") }
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
             "Signal of the H10 chest strap as recorded (130 Hz, no extra filtering by the app). Grid: 0.2 s and 0.5 mV. " +

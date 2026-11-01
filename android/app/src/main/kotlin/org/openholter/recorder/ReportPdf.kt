@@ -9,9 +9,11 @@ import android.graphics.Path
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
+import org.openholter.core.EcgSnap
 import org.openholter.core.EcgWindow
 import org.openholter.core.HrBin
 import org.openholter.core.Marker
+import org.openholter.core.Measurement
 import org.openholter.core.RecordingFiles
 import org.openholter.core.SignalReaders
 import org.openholter.core.Training
@@ -69,7 +71,10 @@ object ReportPdf {
      * [shifted]: the caller widened the window by [HALF_ROW_NS] on both sides, so every row is
      * offset by 5 s and a beat at a row edge in the normal PDF is in the middle of a row here.
      */
-    fun marker(context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long, hrBpm: Int?, shifted: Boolean = false): File {
+    fun marker(
+        context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long, hrBpm: Int?,
+        shifted: Boolean = false, measurements: List<Measurement> = emptyList(),
+    ): File {
         val zone = ZoneId.systemDefault()
         val beforeS = (marker.timestampNs - fromNs) / 1_000_000_000L
         val afterS = (toNs - marker.timestampNs) / 1_000_000_000L
@@ -79,12 +84,20 @@ object ReportPdf {
                     (if (shifted) " (rows shifted by 5 s, so the marker is in the middle of its row)" else "") +
                     ". $SIGNAL" + (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""),
             )
+            if (measurements.isNotEmpty()) {
+                add(
+                    "Blue arrows: time measurements drawn on the app (each end on the tip of a beat or placed by hand; " +
+                        "about ±8 ms at 130 Hz).",
+                )
+            }
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
         }
         return ecg(
             context, "Symptom marker – ${DATE_TIME.format(local(marker.timestampNs, zone))} (${zone.id})",
             marker.comment, info, w, fromNs, toNs, listOf(marker.timestampNs),
-            "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" + if (shifted) "_shifted" else "",
+            "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" +
+                (if (shifted) "_shifted" else "") + (if (measurements.isNotEmpty()) "_measured" else ""),
+            measurements,
         )
     }
 
@@ -157,6 +170,7 @@ object ReportPdf {
     private fun ecg(
         context: Context, title: String, comment: String, info: List<String>, w: EcgWindow,
         fromNs: Long, toNs: Long, markers: List<Long>, fileStem: String,
+        measurements: List<Measurement> = emptyList(),
     ): File {
         val zone = ZoneId.systemDefault()
         val p = paints(context)
@@ -180,7 +194,7 @@ object ReportPdf {
                     if (r >= rows) break
                     val top = TOP_PT + k * (ROW_MM * PT_PER_MM + ROW_GAP_PT)
                     val rowStart = fromNs + r * rowNs
-                    drawRow(c, w, rowStart, top, markers, zone, p.small)
+                    drawRow(c, w, rowStart, top, markers, zone, p.small, measurements)
                     // bpm at the start of the strip (first row, left) and at the end of each
                     // row with a marker (right), inside the grid at the bottom, below the signal.
                     val bpm = "bpm: " + (rowBpm[rowStart]?.toString() ?: "–")
@@ -199,7 +213,10 @@ object ReportPdf {
         }
     }
 
-    private fun drawRow(c: Canvas, w: EcgWindow, startNs: Long, top: Float, markers: List<Long>, zone: ZoneId, label: Paint) {
+    private fun drawRow(
+        c: Canvas, w: EcgWindow, startNs: Long, top: Float, markers: List<Long>, zone: ZoneId, label: Paint,
+        measurements: List<Measurement> = emptyList(),
+    ) {
         val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
         val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
         val height = ROW_MM * PT_PER_MM
@@ -221,8 +238,8 @@ object ReportPdf {
         val baseY = top + height * 0.6f // room for 2.1 mV up, 1.4 mV down
         val i0 = w.t.binarySearch(startNs).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(endNs).let { if (it < 0) -it - 1 else it }
+        val median = if (i1 > i0) w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2] else 0f
         if (i1 > i0) {
-            val median = w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2]
             val path = Path()
             var prev = Long.MIN_VALUE
             for (i in i0 until i1) {
@@ -250,6 +267,47 @@ object ReportPdf {
             }
             c.drawLine(x, top, x, top + height, red)
             c.drawText("MARKER ${CLOCK.format(local(m, zone))}", x + 3f, top + 9f, red)
+        }
+        val xOf = { t: Long -> left + (t - startNs) / 1e9f * MM_PER_S * PT_PER_MM }
+        val yOf = { t: Long -> EcgSnap.valueAt(w, t)?.let { baseY - (it - median) * MM_PER_MV * PT_PER_MM } ?: baseY }
+        for (m in measurements) drawMeasurement(c, m, startNs, endNs, left, width, top, xOf, yOf, label)
+    }
+
+    /**
+     * A measurement as a horizontal double arrow just above the higher of its two points, with
+     * dotted lines down to the points and "812 ms · 74 bpm". If it continues into the next row,
+     * this row's part runs to the edge (label with "→") and the next row's part starts at the edge.
+     */
+    private fun drawMeasurement(
+        c: Canvas, m: Measurement, rowStart: Long, rowEnd: Long, left: Float, width: Float, top: Float,
+        xOf: (Long) -> Float, yOf: (Long) -> Float, label: Paint,
+    ) {
+        val a = minOf(m.aNs, m.bNs)
+        val b = maxOf(m.aNs, m.bNs)
+        if (b < rowStart || a >= rowEnd) return
+        val inA = a in rowStart until rowEnd
+        val inB = b in rowStart until rowEnd
+        val xa = if (inA) xOf(a) else left
+        val xb = if (inB) xOf(b) else left + width
+        val ys = listOfNotNull(if (inA) yOf(a) else null, if (inB) yOf(b) else null)
+        val lineY = ((ys.minOrNull() ?: (top + 20f)) - 7f).coerceAtLeast(top + 14f)
+        val blue = Paint().apply {
+            color = Color.rgb(21, 101, 192); strokeWidth = 0.9f; isAntiAlias = true; style = Paint.Style.STROKE
+        }
+        val dotted = Paint(blue).apply { strokeWidth = 0.6f; pathEffect = android.graphics.DashPathEffect(floatArrayOf(1.5f, 1.5f), 0f) }
+        if (inA) c.drawLine(xa, yOf(a), xa, lineY, dotted)
+        if (inB) c.drawLine(xb, yOf(b), xb, lineY, dotted)
+        c.drawLine(xa, lineY, xb, lineY, blue)
+        val head = Paint(blue).apply { style = Paint.Style.FILL }
+        if (inA) c.drawPath(Path().apply { moveTo(xa, lineY); lineTo(xa + 4f, lineY - 2f); lineTo(xa + 4f, lineY + 2f); close() }, head)
+        if (inB) c.drawPath(Path().apply { moveTo(xb, lineY); lineTo(xb - 4f, lineY - 2f); lineTo(xb - 4f, lineY + 2f); close() }, head)
+        if (inA || !inB) {
+            val text = "%.0f ms · %.0f bpm".format(m.intervalMs, m.bpm) + if (!inB) " →" else ""
+            val tp = Paint(label).apply { color = Color.rgb(21, 101, 192); textSize = 7.5f }
+            val tw = tp.measureText(text)
+            val tx = ((xa + xb) / 2 - tw / 2).coerceIn(left + 2f, left + width - tw - 2f)
+            c.drawRect(tx - 1f, lineY - 9.5f, tx + tw + 1f, lineY - 1.5f, Paint().apply { color = Color.WHITE })
+            c.drawText(text, tx, lineY - 3f, tp)
         }
     }
 

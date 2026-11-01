@@ -37,7 +37,8 @@ directly.
   grid, the H10 heart rate, the comment (editable), and **Export PDF**: A4
   landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed
   (also *shifted*: every row moved by 5 s so the marker is mid-row, for beats
-  that fell on a row edge),
+  that fell on a row edge). The first row shows "bpm: …" bottom left and the
+  row with the marker "bpm: …" bottom right (H10 heart rate, median of the row),
   for a doctor (share sheet: e-mail, Drive, save to Files …).
 - **Trainings**: a blue **Start training / Stop training** button under the
   recording button (with the elapsed time; the notification shows it too).

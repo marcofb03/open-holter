@@ -2,7 +2,6 @@ package org.openholter.recorder.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -37,10 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -49,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openholter.core.EcgRows
 import org.openholter.core.EcgSnap
 import org.openholter.core.EcgWindow
 import org.openholter.core.Marker
@@ -65,6 +64,7 @@ import kotlin.math.ceil
 private val MEASURE_BLUE = Color(0xFF1565C0)
 private val MS_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 private const val ROW_NS = 10_000_000_000L
+private val GUTTER = 34.dp
 
 /**
  * Measure intervals on the ECG of a marker: the same 10-s rows as the PDF (normal or
@@ -82,6 +82,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
     var window by remember { mutableStateOf<EcgWindow?>(null) }
     var measurements by remember { mutableStateOf<List<Measurement>>(emptyList()) }
     var snapToPeak by remember { mutableStateOf(true) }
+    var amplitudeMode by remember { mutableStateOf(false) } // tap = mV label instead of a time measurement
     var shifted by remember { mutableStateOf(false) }
     var zoom by remember { mutableIntStateOf(1) }
     var pending by remember { mutableStateOf<Long?>(null) }
@@ -101,9 +102,21 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
     val rowsFrom = if (shifted) fromNs - ReportPdf.HALF_ROW_NS else fromNs
     val rowsTo = if (shifted) toNs + ReportPdf.HALF_ROW_NS else toNs
     val rows = ceil((rowsTo - rowsFrom).toDouble() / ROW_NS).toInt()
+    val rowStartOf = { t: Long -> rowsFrom + Math.floorDiv(t - rowsFrom, ROW_NS) * ROW_NS }
 
     fun tap(tNs: Long) {
         val w = window ?: return
+        if (amplitudeMode) {
+            pending = null
+            val base = EcgRows.median(w, rowStartOf(tNs), rowStartOf(tNs) + ROW_NS) ?: return
+            val point = (if (snapToPeak) EcgSnap.extreme(w, tNs, base) else EcgSnap.nearest(w, tNs)) ?: return
+            val m = Measurement(point, point)
+            if (m !in measurements) {
+                measurements = (measurements + m).sortedBy { it.aNs }
+                scope.launch { withContext(Dispatchers.IO) { app.measurements.add(ts, m) } }
+            }
+            return
+        }
         val point = (if (snapToPeak) EcgSnap.peak(w, tNs) else EcgSnap.nearest(w, tNs)) ?: return
         val first = pending
         if (first == null) {
@@ -125,10 +138,18 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         TextButton(onClick = onBack) { Text("◀ Back to the marker") }
         Text("Measure intervals", style = MaterialTheme.typography.headlineSmall)
         Text(
-            if (pending == null) "Tap a point on the ECG, then a second one." else "Now tap the second point.",
+            when {
+                amplitudeMode -> "Tap a wave to label its height in mV."
+                pending == null -> "Tap a point on the ECG, then a second one."
+                else -> "Now tap the second point."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = if (pending == null) MaterialTheme.colorScheme.onSurface else MEASURE_BLUE,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = !amplitudeMode, onClick = { amplitudeMode = false }, label = { Text("Time (ms)") })
+            FilterChip(selected = amplitudeMode, onClick = { amplitudeMode = true; pending = null }, label = { Text("Amplitude (mV)") })
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterChip(selected = snapToPeak, onClick = { snapToPeak = true }, label = { Text("Snap to peak") })
             FilterChip(selected = !snapToPeak, onClick = { snapToPeak = false }, label = { Text("Free") })
@@ -146,6 +167,8 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
             Text("No ECG was recorded around this marker.")
         } else {
             val measurer = rememberTextMeasurer()
+            val paper = remember(w, rowsFrom, rowsTo) { paperRows(w, rowsFrom, rowsTo, ROW_NS, extraTopMv = 0.8f) }
+            val gutterPx = with(LocalDensity.current) { GUTTER.toPx() }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val rowWidth = maxWidth * zoom
                 Box(Modifier.horizontalScroll(rememberScrollState())) {
@@ -158,12 +181,16 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                             Canvas(
-                                Modifier.fillMaxWidth().height(140.dp).background(Color.White)
-                                    .pointerInput(rowStart, snapToPeak, pending, window, shifted) {
-                                        detectTapGestures { pos -> tap(rowStart + (pos.x / size.width * ROW_NS).toLong()) }
+                                Modifier.fillMaxWidth().height((paper.spanMv * 40).dp)
+                                    .pointerInput(rowStart, snapToPeak, amplitudeMode, pending, window, shifted) {
+                                        detectTapGestures { pos ->
+                                            if (pos.x >= gutterPx) {
+                                                tap(rowStart + ((pos.x - gutterPx) / (size.width - gutterPx) * ROW_NS).toLong())
+                                            }
+                                        }
                                     },
                             ) {
-                                drawEcgRow(w, rowStart, ts, measurements, pending, measurer)
+                                drawEcgRow(w, rowStart, paper, gutterPx, ts, measurements, pending, measurer)
                             }
                         }
                     }
@@ -176,12 +203,22 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                 measurements.forEachIndexed { i, m ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("${i + 1}.  %.0f ms · %.0f bpm".format(m.intervalMs, m.bpm), color = MEASURE_BLUE)
-                            Text(
-                                MS_CLOCK.format(RecordingFiles.instantOf(m.aNs).atZone(zone)) + " → " +
-                                    MS_CLOCK.format(RecordingFiles.instantOf(m.bNs).atZone(zone)),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
+                            if (m.isAmplitude) {
+                                val win = window
+                                val base = win?.let { EcgRows.median(it, rowStartOf(m.aNs), rowStartOf(m.aNs) + ROW_NS) }
+                                val v = win?.let { EcgSnap.valueAt(it, m.aNs) }
+                                Text(
+                                    "${i + 1}.  " + if (v != null && base != null) String.format(java.util.Locale.ROOT, "%+.2f mV", v - base) else "– mV",
+                                )
+                                Text(MS_CLOCK.format(RecordingFiles.instantOf(m.aNs).atZone(zone)), style = MaterialTheme.typography.labelSmall)
+                            } else {
+                                Text("${i + 1}.  %.0f ms · %.0f bpm".format(m.intervalMs, m.bpm), color = MEASURE_BLUE)
+                                Text(
+                                    MS_CLOCK.format(RecordingFiles.instantOf(m.aNs).atZone(zone)) + " → " +
+                                        MS_CLOCK.format(RecordingFiles.instantOf(m.bNs).atZone(zone)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
                         }
                         TextButton(onClick = {
                             measurements = measurements - m
@@ -210,7 +247,9 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         ) { Text("Export PDF with my measurements") }
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
-            "\"Snap to peak\" puts each point on the highest point of the signal within 50 ms of your tap (the tip " +
+"\"Amplitude\" labels a wave with its mV above (+) or below (−) the row's baseline (the median of the " +
+                "row, 0 on the scale); with \"Snap to peak\" it takes the farthest point within 50 ms. " +
+                "\"Snap to peak\" puts each point on the highest point of the signal within 50 ms of your tap (the tip " +
                 "of a beat), good for the time from beat to beat. \"Free\" keeps the point where you tap, e.g. for the " +
                 "start and end of one beat; zoom in for that. The H10 records every 7.7 ms, so a measurement is " +
                 "accurate to about ±8 ms. bpm = 60 000 ÷ ms. Not a medical device.",
@@ -221,76 +260,48 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
 
 private val CLOCK_S: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
-/** One 10-s row: ECG-paper grid, the signal (3.5 mV per row, baseline at 60 %), the marker, measurements. */
+/** One 10-s row: ECG paper with the mV scale, the signal, the marker, time measurements and mV labels. */
 private fun DrawScope.drawEcgRow(
-    w: EcgWindow, rowStart: Long, markerNs: Long, measurements: List<Measurement>, pending: Long?,
-    measurer: androidx.compose.ui.text.TextMeasurer,
+    w: EcgWindow, rowStart: Long, paper: PaperRows, gutter: Float, markerNs: Long, measurements: List<Measurement>,
+    pending: Long?, measurer: androidx.compose.ui.text.TextMeasurer,
 ) {
+    val row = drawPaperRow(w, rowStart, ROW_NS, paper, gutter, measurer)
     val rowEnd = rowStart + ROW_NS
     val width = size.width
-    val height = size.height
-    val pxPerS = width / 10f
-    val pxPerMv = height / 3.5f
-    val minor = Color(0xFFF6C9C9)
-    val major = Color(0xFFE59A9A)
-    var k = 0
-    while (k <= 50) { // 0.2 s lines, darker every second
-        val x = k * 0.2f * pxPerS
-        drawLine(if (k % 5 == 0) major else minor, Offset(x, 0f), Offset(x, height), strokeWidth = if (k % 5 == 0) 1.5f else 1f)
-        k++
-    }
-    val baseY = height * 0.6f
-    var mv = -2f
-    while (mv <= 2.5f) {
-        val y = baseY - mv * pxPerMv
-        if (y in 0f..height) drawLine(major, Offset(0f, y), Offset(width, y), strokeWidth = 1f)
-        mv += 0.5f
-    }
-    val i0 = w.t.binarySearch(rowStart).let { if (it < 0) -it - 1 else it }
-    val i1 = w.t.binarySearch(rowEnd).let { if (it < 0) -it - 1 else it }
-    val median = if (i1 > i0) w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2] else 0f
-    val xOf = { t: Long -> (t - rowStart) / 1e9f * pxPerS }
-    val yOf = { t: Long -> EcgSnap.valueAt(w, t)?.let { baseY - (it - median) * pxPerMv } ?: baseY }
-    if (i1 > i0) {
-        val path = Path()
-        var prev = Long.MIN_VALUE
-        for (i in i0 until i1) {
-            val x = xOf(w.t[i])
-            val y = baseY - (w.mv[i] - median) * pxPerMv
-            if (prev == Long.MIN_VALUE || w.t[i] - prev > 50_000_000L) path.moveTo(x, y) else path.lineTo(x, y)
-            prev = w.t[i]
-        }
-        clipRect { drawPath(path, Color.Black, style = Stroke(width = 1.6f)) }
-    }
     if (markerNs in rowStart until rowEnd) {
-        val x = xOf(markerNs)
-        drawLine(Color(0xFFD32F2F), Offset(x, 0f), Offset(x, height), strokeWidth = 3f)
+        val x = row.xOf(markerNs)
+        drawLine(Color(0xFFD32F2F), Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
     }
+    val yAt = { t: Long -> EcgSnap.valueAt(w, t)?.let { row.yOfMv(it) } ?: row.baseY }
     val label = TextStyle(fontSize = 11.sp, color = MEASURE_BLUE, background = Color.White)
     for (m in measurements) {
+        if (m.isAmplitude) {
+            drawAmplitudeLabel(w, row, m.aNs, measurer)
+            continue
+        }
         val a = minOf(m.aNs, m.bNs)
         val b = maxOf(m.aNs, m.bNs)
         if (b < rowStart || a >= rowEnd) continue
         val inA = a in rowStart until rowEnd
         val inB = b in rowStart until rowEnd
-        val xa = if (inA) xOf(a) else 0f
-        val xb = if (inB) xOf(b) else width
-        val ys = listOfNotNull(if (inA) yOf(a) else null, if (inB) yOf(b) else null)
+        val xa = if (inA) row.xOf(a) else gutter
+        val xb = if (inB) row.xOf(b) else width
+        val ys = listOfNotNull(if (inA) yAt(a) else null, if (inB) yAt(b) else null)
         val lineY = ((ys.minOrNull() ?: 40f) - 18f).coerceAtLeast(34f)
         val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
-        if (inA) drawLine(MEASURE_BLUE, Offset(xa, yOf(a)), Offset(xa, lineY), strokeWidth = 2f, pathEffect = dash)
-        if (inB) drawLine(MEASURE_BLUE, Offset(xb, yOf(b)), Offset(xb, lineY), strokeWidth = 2f, pathEffect = dash)
+        if (inA) drawLine(MEASURE_BLUE, Offset(xa, yAt(a)), Offset(xa, lineY), strokeWidth = 2f, pathEffect = dash)
+        if (inB) drawLine(MEASURE_BLUE, Offset(xb, yAt(b)), Offset(xb, lineY), strokeWidth = 2f, pathEffect = dash)
         drawLine(MEASURE_BLUE, Offset(xa, lineY), Offset(xb, lineY), strokeWidth = 3f)
         if (inA) drawPath(Path().apply { moveTo(xa, lineY); lineTo(xa + 14f, lineY - 7f); lineTo(xa + 14f, lineY + 7f); close() }, MEASURE_BLUE)
         if (inB) drawPath(Path().apply { moveTo(xb, lineY); lineTo(xb - 14f, lineY - 7f); lineTo(xb - 14f, lineY + 7f); close() }, MEASURE_BLUE)
         if (inA || !inB) {
             val text = "%.0f ms · %.0f bpm".format(m.intervalMs, m.bpm) + if (!inB) " →" else ""
             val layout = measurer.measure(text, label)
-            val tx = ((xa + xb) / 2 - layout.size.width / 2).coerceIn(2f, (width - layout.size.width - 2f).coerceAtLeast(2f))
+            val tx = ((xa + xb) / 2 - layout.size.width / 2).coerceIn(gutter, (width - layout.size.width - 2f).coerceAtLeast(gutter))
             drawText(layout, topLeft = Offset(tx, lineY - layout.size.height - 4f))
         }
     }
     if (pending != null && pending in rowStart until rowEnd) {
-        drawCircle(MEASURE_BLUE, radius = 9f, center = Offset(xOf(pending), yOf(pending)))
+        drawCircle(MEASURE_BLUE, radius = 9f, center = Offset(row.xOf(pending), yAt(pending)))
     }
 }

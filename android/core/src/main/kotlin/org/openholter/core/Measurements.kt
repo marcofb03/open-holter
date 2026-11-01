@@ -3,8 +3,14 @@ package org.openholter.core
 import java.io.File
 import java.time.ZoneId
 
-/** A time measurement between two ECG samples (Unix ns), drawn by the owner on a marker report. */
+/**
+ * A time measurement between two ECG samples (Unix ns), drawn by the owner on a marker
+ * report. With [aNs] == [bNs] it is an amplitude label: the mV of that sample above or
+ * below its row's baseline.
+ */
 data class Measurement(val aNs: Long, val bNs: Long) {
+    val isAmplitude: Boolean get() = aNs == bNs
+
     val intervalMs: Double get() = Math.abs(bNs - aNs) / 1e6
 
     /** The rate an interval of this length corresponds to (60 000 / ms). */
@@ -81,6 +87,20 @@ object EcgSnap {
         return w.t[best]
     }
 
+    /**
+     * Time of the sample within [radiusNs] of [tNs] that is farthest from [baseline], up or
+     * down (the tip of a positive or a negative wave), or the nearest sample; null if empty.
+     */
+    fun extreme(w: EcgWindow, tNs: Long, baseline: Float, radiusNs: Long = PEAK_RADIUS_NS): Long? {
+        if (w.size == 0) return null
+        val i0 = w.t.binarySearch(tNs - radiusNs).let { if (it < 0) -it - 1 else it }
+        val i1 = w.t.binarySearch(tNs + radiusNs + 1).let { if (it < 0) -it - 1 else it }
+        if (i1 <= i0) return nearest(w, tNs)
+        var best = i0
+        for (i in i0 until i1) if (Math.abs(w.mv[i] - baseline) > Math.abs(w.mv[best] - baseline)) best = i
+        return w.t[best]
+    }
+
     /** Time of the sample nearest to [tNs]; null for an empty window. */
     fun nearest(w: EcgWindow, tNs: Long): Long? {
         if (w.size == 0) return null
@@ -98,5 +118,41 @@ object EcgSnap {
         val t = nearest(w, tNs) ?: return null
         val i = w.t.binarySearch(t)
         return if (i >= 0) w.mv[i] else null
+    }
+}
+
+/** Rows of an ECG strip (10 s on paper, 5 s on the phone): baseline and how far the signal reaches. */
+object EcgRows {
+    /** Median of the samples with [fromNs] <= t < [toNs] (the row's baseline, 0 mV on its scale), or null. */
+    fun median(w: EcgWindow, fromNs: Long, toNs: Long): Float? {
+        val i0 = w.t.binarySearch(fromNs).let { if (it < 0) -it - 1 else it }
+        val i1 = w.t.binarySearch(toNs).let { if (it < 0) -it - 1 else it }
+        if (i1 <= i0) return null
+        return w.mv.copyOfRange(i0, i1).sortedArray()[(i1 - i0) / 2]
+    }
+
+    /**
+     * How far the signal goes above (`first`) and below (`second`, positive number) its
+     * row's baseline, over all rows of [rowNs] from [fromNs] to [toNs], in mV.
+     */
+    fun extent(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long): Pair<Float, Float> {
+        var up = 0f
+        var down = 0f
+        var a = fromNs
+        while (a < toNs) {
+            val b = a + rowNs
+            val base = median(w, a, b)
+            if (base != null) {
+                val i0 = w.t.binarySearch(a).let { if (it < 0) -it - 1 else it }
+                val i1 = w.t.binarySearch(b).let { if (it < 0) -it - 1 else it }
+                for (i in i0 until i1) {
+                    val d = w.mv[i] - base
+                    if (d > up) up = d
+                    if (-d > down) down = -d
+                }
+            }
+            a = b
+        }
+        return up to down
     }
 }

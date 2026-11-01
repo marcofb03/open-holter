@@ -64,4 +64,31 @@ class MeasurementsTest {
         assertEquals(RecordingFiles.MEASUREMENTS_HEADER, lines[0])
         assertEquals("$t0,${t0 + 900_000_000L},${t0 + 1_000_000_000L},100.0", lines[1])
     }
+
+    @Test
+    fun `extreme finds negative waves too, and amplitude labels are point measurements`() {
+        val mv = FloatArray(260) { 0.1f }
+        mv[60] = 1.5f
+        mv[63] = -0.9f
+        val w = EcgWindow(LongArray(260) { t0 + it * step }, mv)
+        assertEquals(t0 + 60 * step, EcgSnap.extreme(w, t0 + 61 * step, baseline = 0.1f))
+        assertEquals(t0 + 63 * step, EcgSnap.extreme(w, t0 + 63 * step, baseline = 0.1f, radiusNs = 10_000_000L))
+        assertEquals(true, Measurement(t0, t0).isAmplitude)
+        assertEquals(false, Measurement(t0, t0 + 1).isAmplitude)
+    }
+
+    @Test
+    fun `row baseline and extent above and below it`() {
+        // Two 1-s rows: baseline 0.2 mV with a +1.3 mV peak, then baseline -0.1 mV with a -0.8 mV trough.
+        val n = 260
+        val mv = FloatArray(n) { if (it < 130) 0.2f else -0.1f }
+        mv[40] = 1.5f
+        mv[200] = -0.9f
+        val w = EcgWindow(LongArray(n) { t0 + it * step }, mv)
+        assertEquals(0.2f, EcgRows.median(w, t0, t0 + 1_000_000_000L)!!, 1e-6f)
+        val (up, down) = EcgRows.extent(w, t0, t0 + 2_000_000_000L, 1_000_000_000L)
+        assertEquals(1.3f, up, 1e-5f)
+        assertEquals(0.8f, down, 1e-5f)
+        assertNull(EcgRows.median(w, t0 + 10_000_000_000L, t0 + 11_000_000_000L))
+    }
 }

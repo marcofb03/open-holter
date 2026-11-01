@@ -72,7 +72,7 @@ object ReportPdf {
      * offset by 5 s and a beat at a row edge in the normal PDF is in the middle of a row here.
      */
     fun marker(
-        context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long, hrBpm: Int?,
+        context: Context, marker: Marker, w: EcgWindow, fromNs: Long, toNs: Long,
         shifted: Boolean = false, measurements: List<Measurement> = emptyList(),
     ): File {
         val zone = ZoneId.systemDefault()
@@ -82,14 +82,8 @@ object ReportPdf {
             add(
                 "ECG from $beforeS s before to $afterS s after the marker" +
                     (if (shifted) " (rows shifted by 5 s, so the marker is in the middle of its row)" else "") +
-                    ". $SIGNAL" + (hrBpm?.let { " H10 heart rate around the marker: $it bpm." } ?: ""),
+                    ". $SIGNAL",
             )
-            if (measurements.isNotEmpty()) {
-                add(
-                    "Blue arrows: time measurements drawn on the app (each end on the tip of a beat or placed by hand; " +
-                        "about ±8 ms at 130 Hz).",
-                )
-            }
             if (w.size == 0) add("No ECG was recorded around this marker (strap not connected or recording stopped).")
         }
         return ecg(

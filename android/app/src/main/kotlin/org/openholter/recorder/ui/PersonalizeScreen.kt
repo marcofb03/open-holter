@@ -74,7 +74,7 @@ private const val ROW_NS = 10_000_000_000L
  * "Export PDF with my measurements".
  */
 @Composable
-fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, hr: Int?, onBack: () -> Unit) {
+fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Unit) {
     val context = LocalContext.current
     val app = HolterApp.from(context)
     val zone = ZoneId.systemDefault()
@@ -198,7 +198,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, hr: Int?, onBack
                 exportMessage = "Making the PDF…"
                 scope.launch {
                     withContext(Dispatchers.IO) {
-                        runCatching { ReportPdf.marker(context, marker, win, rowsFrom, rowsTo, hr, shifted, measurements) }
+                        runCatching { ReportPdf.marker(context, marker, win, rowsFrom, rowsTo, shifted, measurements) }
                     }.onSuccess {
                         exportMessage = null
                         context.startActivity(ReportPdf.shareIntent(context, it))

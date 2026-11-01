@@ -173,7 +173,8 @@ object ReportPdf {
             for (pg in 0 until pages) {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pg + 1).create())
                 val c = page.canvas
-                header(c, p, title, comment, info)
+                header(c, p, title, comment, info, titleMaxW = SCALE_LEGEND_X - MARGIN - 10f)
+                scaleLegend(c, p.small)
                 for (k in 0 until ROWS_PER_PAGE) {
                     val r = pg * ROWS_PER_PAGE + k
                     if (r >= rows) break
@@ -357,14 +358,42 @@ object ReportPdf {
     }
 
     /** Title, the comment (at most 2 lines) and the description (always shown), at most 5 lines in all. */
-    private fun header(c: Canvas, p: Paints, title: String, comment: String, info: List<String>) {
+    private fun header(c: Canvas, p: Paints, title: String, comment: String, info: List<String>, titleMaxW: Float = PAGE_W - 2 * MARGIN) {
         val maxW = PAGE_W - 2 * MARGIN
         val commentLines = wrap("Comment: " + comment.ifBlank { "(none)" }, p.text, maxW).let {
             if (it.size > 2) listOf(it[0], it[1].dropLast(1) + "…") else it
         }
         val lines = commentLines + info.flatMap { wrap(it, p.text, maxW) }
-        c.drawText(title, MARGIN, 40f, p.title)
+        // A long title gets a smaller font instead of running into the scale legend.
+        val titlePaint = Paint(p.title)
+        while (titlePaint.measureText(title) > titleMaxW && titlePaint.textSize > 9f) titlePaint.textSize -= 0.5f
+        c.drawText(title, MARGIN, 40f, titlePaint)
         lines.take(5).forEachIndexed { i, line -> c.drawText(line, MARGIN, 56f + i * 11.5f, p.text) }
+    }
+
+    /** Left edge of the scale legend in the top right corner of ECG pages. */
+    private const val SCALE_LEGEND_X = PAGE_W - MARGIN - 270f
+
+    /**
+     * One large square of the grid (5 x 5 small squares) in the top right corner, with what it
+     * measures: 25 mm/s gives 40 ms per mm, 10 mm/mV gives 0.1 mV per mm.
+     */
+    private fun scaleLegend(c: Canvas, small: Paint) {
+        val mm = PT_PER_MM
+        val x0 = SCALE_LEGEND_X
+        val y0 = 16f
+        val minor = Paint().apply { color = Color.rgb(246, 201, 201); strokeWidth = 0.25f }
+        val major = Paint().apply { color = Color.rgb(229, 154, 154); strokeWidth = 0.6f }
+        for (i in 0..5) {
+            val p = if (i == 0 || i == 5) major else minor
+            c.drawLine(x0 + i * mm, y0, x0 + i * mm, y0 + 5 * mm, p)
+            c.drawLine(x0, y0 + i * mm, x0 + 5 * mm, y0 + i * mm, p)
+        }
+        val ink = Paint(small).apply { color = Color.BLACK }
+        val tx = x0 + 5 * mm + 6f
+        c.drawText("1 large square (5 × 5 small) = 200 ms wide, 0.5 mV high", tx, y0 + 6f, ink)
+        c.drawText("1 small square = 40 ms wide, 0.1 mV high", tx, y0 + 15f, ink)
+        c.drawText("(25 mm/s, 10 mm/mV)", tx, y0 + 24f, ink)
     }
 
     private fun trainingTitle(t: Training, endNs: Long, zone: ZoneId): String =

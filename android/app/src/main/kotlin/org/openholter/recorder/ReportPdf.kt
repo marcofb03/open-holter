@@ -13,6 +13,7 @@ import org.openholter.core.EcgWindow
 import org.openholter.core.HrBin
 import org.openholter.core.Marker
 import org.openholter.core.RecordingFiles
+import org.openholter.core.SignalReaders
 import org.openholter.core.Training
 import java.io.File
 import java.time.Instant
@@ -57,7 +58,8 @@ object ReportPdf {
     private val FILE_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
     private const val SIGNAL =
         "Polar H10 chest strap, single lead, 130 Hz. Signal as delivered by the H10, no extra filtering by the app " +
-            "(the H10's internal filtering is not documented by Polar). Scale 25 mm/s, 10 mm/mV."
+            "(the H10's internal filtering is not documented by Polar). Scale 25 mm/s, 10 mm/mV. " +
+            "\"bpm\" in a row: H10 heart rate, median of that row's readings with skin contact."
     private const val FOOTER = "Recorded with open-holter (open source). Not a medical device, not for diagnosis on its own."
 
     fun ecgPages(fromNs: Long, toNs: Long): Int =
@@ -161,17 +163,29 @@ object ReportPdf {
         val rowNs = SECONDS_PER_ROW * 1_000_000_000L
         val rows = ceil((toNs - fromNs).toDouble() / rowNs).toInt()
         val pages = ecgPages(fromNs, toNs)
+        // H10 heart rate per row (bins aligned to the rows), for the "bpm" labels.
+        val rowBpm = runCatching {
+            SignalReaders.heartRate(Storage.root(context), zone, fromNs, fromNs + rows * rowNs, rowNs)
+                .associate { it.startNs to it.median }
+        }.getOrDefault(emptyMap())
         val doc = PdfDocument()
         try {
             for (pg in 0 until pages) {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pg + 1).create())
                 val c = page.canvas
-                header(c, p, title, comment, info)
+                header(c, p, title, comment, info, titleMaxW = SCALE_LEGEND_X - MARGIN - 10f)
+                scaleLegend(c, p.small)
                 for (k in 0 until ROWS_PER_PAGE) {
                     val r = pg * ROWS_PER_PAGE + k
                     if (r >= rows) break
                     val top = TOP_PT + k * (ROW_MM * PT_PER_MM + ROW_GAP_PT)
-                    drawRow(c, w, fromNs + r * rowNs, top, markers, zone, p.small)
+                    val rowStart = fromNs + r * rowNs
+                    drawRow(c, w, rowStart, top, markers, zone, p.small)
+                    // bpm at the start of the strip (first row, left) and at the end of each
+                    // row with a marker (right), inside the grid at the bottom, below the signal.
+                    val bpm = "bpm: " + (rowBpm[rowStart]?.toString() ?: "–")
+                    if (r == 0) rowLabel(c, bpm, top, p.small, right = false)
+                    if (markers.any { it in rowStart until rowStart + rowNs }) rowLabel(c, bpm, top, p.small, right = true)
                 }
                 c.drawText(
                     "$FOOTER Print at 100 % (no \"fit to page\") to keep 25 mm/s and 10 mm/mV.   Page ${pg + 1} of $pages",
@@ -237,6 +251,19 @@ object ReportPdf {
             c.drawLine(x, top, x, top + height, red)
             c.drawText("MARKER ${CLOCK.format(local(m, zone))}", x + 3f, top + 9f, red)
         }
+    }
+
+    /** A small label on a white patch at the bottom left or right inside an ECG row. */
+    private fun rowLabel(c: Canvas, text: String, top: Float, paint: Paint, right: Boolean) {
+        val left = (PAGE_W - SECONDS_PER_ROW * MM_PER_S * PT_PER_MM) / 2
+        val width = SECONDS_PER_ROW * MM_PER_S * PT_PER_MM
+        val bottom = top + ROW_MM * PT_PER_MM
+        val tw = paint.measureText(text)
+        val x = if (right) left + width - tw - 4f else left + 4f
+        val bg = Paint().apply { color = Color.WHITE }
+        c.drawRect(x - 2f, bottom - 13f, x + tw + 2f, bottom - 2f, bg)
+        val ink = Paint(paint).apply { color = Color.BLACK }
+        c.drawText(text, x, bottom - 4.5f, ink)
     }
 
     // ---- heart-rate chart ------------------------------------------------------------------
@@ -331,14 +358,42 @@ object ReportPdf {
     }
 
     /** Title, the comment (at most 2 lines) and the description (always shown), at most 5 lines in all. */
-    private fun header(c: Canvas, p: Paints, title: String, comment: String, info: List<String>) {
+    private fun header(c: Canvas, p: Paints, title: String, comment: String, info: List<String>, titleMaxW: Float = PAGE_W - 2 * MARGIN) {
         val maxW = PAGE_W - 2 * MARGIN
         val commentLines = wrap("Comment: " + comment.ifBlank { "(none)" }, p.text, maxW).let {
             if (it.size > 2) listOf(it[0], it[1].dropLast(1) + "…") else it
         }
         val lines = commentLines + info.flatMap { wrap(it, p.text, maxW) }
-        c.drawText(title, MARGIN, 40f, p.title)
+        // A long title gets a smaller font instead of running into the scale legend.
+        val titlePaint = Paint(p.title)
+        while (titlePaint.measureText(title) > titleMaxW && titlePaint.textSize > 9f) titlePaint.textSize -= 0.5f
+        c.drawText(title, MARGIN, 40f, titlePaint)
         lines.take(5).forEachIndexed { i, line -> c.drawText(line, MARGIN, 56f + i * 11.5f, p.text) }
+    }
+
+    /** Left edge of the scale legend in the top right corner of ECG pages. */
+    private const val SCALE_LEGEND_X = PAGE_W - MARGIN - 270f
+
+    /**
+     * One large square of the grid (5 x 5 small squares) in the top right corner, with what it
+     * measures: 25 mm/s gives 40 ms per mm, 10 mm/mV gives 0.1 mV per mm.
+     */
+    private fun scaleLegend(c: Canvas, small: Paint) {
+        val mm = PT_PER_MM
+        val x0 = SCALE_LEGEND_X
+        val y0 = 16f
+        val minor = Paint().apply { color = Color.rgb(246, 201, 201); strokeWidth = 0.25f }
+        val major = Paint().apply { color = Color.rgb(229, 154, 154); strokeWidth = 0.6f }
+        for (i in 0..5) {
+            val p = if (i == 0 || i == 5) major else minor
+            c.drawLine(x0 + i * mm, y0, x0 + i * mm, y0 + 5 * mm, p)
+            c.drawLine(x0, y0 + i * mm, x0 + 5 * mm, y0 + i * mm, p)
+        }
+        val ink = Paint(small).apply { color = Color.BLACK }
+        val tx = x0 + 5 * mm + 6f
+        c.drawText("1 large square (5 × 5 small) = 200 ms wide, 0.5 mV high", tx, y0 + 6f, ink)
+        c.drawText("1 small square = 40 ms wide, 0.1 mV high", tx, y0 + 15f, ink)
+        c.drawText("(25 mm/s, 10 mm/mV)", tx, y0 + 24f, ink)
     }
 
     private fun trainingTitle(t: Training, endNs: Long, zone: ZoneId): String =

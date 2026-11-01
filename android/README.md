@@ -45,10 +45,12 @@ directly.
   leaves the grid; an mV scale at the left of each row (0 = the row's
   baseline, its median) reads the height of any wave.
   **Personalize: measure intervals** opens the same rows in the app: tap two
-  points (snapped to the tip of the beat within 50 ms, or *free*), and a blue
+  points (snapped to the top or bottom of the wave nearest to your finger,
+  within 150 ms, or *free*), and a blue
   arrow shows the time in ms and as bpm (60 000 ÷ ms); in *Amplitude (mV)*
   mode a tap labels a wave with its mV above or below the baseline (small black
-  number and a light dashed line, never over the trace); zoom 1–4×, normal or
+  number above a top or below a bottom, joined to the point by a light dashed
+  line, never over the trace); zoom 1–4×, normal or
   shifted rows, delete; saved per marker (`measurements_<day>.csv`) and
   exported with *Export PDF with my measurements*,
   for a doctor (share sheet: e-mail, Drive, save to Files …).

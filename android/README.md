@@ -38,7 +38,13 @@ directly.
   landscape at 25 mm/s and 10 mm/mV, 10 s per row, as many pages as needed
   (also *shifted*: every row moved by 5 s so the marker is mid-row, for beats
   that fell on a row edge). The first row shows "bpm: …" bottom left and the
-  row with the marker "bpm: …" bottom right (H10 heart rate, median of the row),
+  row with the marker "bpm: …" bottom right (H10 heart rate, median of the row);
+  a legend at the top right explains the grid (small square 40 ms × 0.1 mV).
+  **Personalize: measure intervals** opens the same rows in the app: tap two
+  points (snapped to the tip of the beat within 50 ms, or *free*), and a blue
+  arrow shows the time in ms and as bpm (60 000 ÷ ms); zoom 1–4×, normal or
+  shifted rows, delete; saved per marker (`measurements_<day>.csv`) and
+  exported with *Export PDF with my measurements*,
   for a doctor (share sheet: e-mail, Drive, save to Files …).
 - **Trainings**: a blue **Start training / Stop training** button under the
   recording button (with the elapsed time; the notification shows it too).
@@ -172,6 +178,7 @@ in this column order and with these units:
 | `acc_*.csv` | `timestamp_ns,x_mG,y_mG,z_mG` | Unix ns, milli-g (integers) |
 | `hr_*.csv` | `timestamp_ns,hr_bpm,rr_ms,contact,contact_supported` | Unix ns, bpm, ms (may be empty), `0`/`1`, `0`/`1` |
 | `markers_<day>.csv` (daily) | `timestamp_ns,time_local,comment` | Unix ns of the press, local time, comment (always quoted, `"` doubled, may be empty) |
+| `measurements_<day>.csv` (day of the marker) | `marker_ns,a_ns,b_ns,interval_ms` | marker, the two measured points (Unix ns), interval for reading |
 | `trainings_<day>.csv` (day of the start) | `start_ns,end_ns,start_local,end_local,comment` | Unix ns (`end_ns` empty while running), local times, comment (quoted as above) |
 
 The headers are defined once, in `core/.../RecordingFiles.kt`, and the unit
@@ -189,6 +196,7 @@ All files are in app-specific storage:
     events_2026-10-21.log      connection / pause / gap log
     markers_2026-10-21.csv     symptom markers with optional comment
     trainings_2026-10-21.csv   training sessions: start, end, comment
+    measurements_2026-10-21.csv  intervals measured on marker reports
 ```
 
 Files are split by the **local hour** of the data they contain. If the app
@@ -326,6 +334,9 @@ events log on the phone shows the same information.
         dialog opens; the day is blue (half red, half blue with a marker);
         the training report shows the heart-rate chart; export the summary
         PDF and the full ECG PDF.
+21. [ ] Marker report → *Personalize*: tap two beats (snap), the arrow shows
+        ms and bpm; *Free* + 4× zoom for one beat's width; delete one; back
+        and in again (saved); *Export PDF with my measurements*.
 
 ## Build
 

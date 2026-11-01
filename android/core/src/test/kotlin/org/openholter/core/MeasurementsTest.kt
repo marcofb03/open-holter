@@ -78,7 +78,7 @@ class MeasurementsTest {
     }
 
     @Test
-    fun `row baseline and extent above and below it`() {
+    fun `row median, and raw extent above and below 0 mV`() {
         // Two 1-s rows: baseline 0.2 mV with a +1.3 mV peak, then baseline -0.1 mV with a -0.8 mV trough.
         val n = 260
         val mv = FloatArray(n) { if (it < 130) 0.2f else -0.1f }
@@ -87,8 +87,8 @@ class MeasurementsTest {
         val w = EcgWindow(LongArray(n) { t0 + it * step }, mv)
         assertEquals(0.2f, EcgRows.median(w, t0, t0 + 1_000_000_000L)!!, 1e-6f)
         val (up, down) = EcgRows.extent(w, t0, t0 + 2_000_000_000L, 1_000_000_000L)
-        assertEquals(1.3f, up, 1e-5f)
-        assertEquals(0.8f, down, 1e-5f)
+        assertEquals(1.5f, up, 1e-5f)
+        assertEquals(0.9f, down, 1e-5f)
         assertNull(EcgRows.median(w, t0 + 10_000_000_000L, t0 + 11_000_000_000L))
     }
 

@@ -194,7 +194,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                             // in every row; room for arrows and mV numbers outside the grid, only where needed.
                             val paper = remember(w, rowStart, rowNs) { paperRows(w, rowStart, rowStart + rowNs, rowNs) }
                             val inRow = measurements.filter { minOf(it.aNs, it.bNs) < rowStart + rowNs && maxOf(it.aNs, it.bNs) >= rowStart }
-                            val rowMedian = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
+                            val rowMedian = 0f // raw values: 0 mV is the H10's zero
                             val sides = inRow.filter { it.isAmplitude && it.aNs in rowStart until rowStart + rowNs }
                                 .map { m -> EcgSnap.kind(w, m.aNs) ?: ((EcgSnap.valueAt(w, m.aNs) ?: rowMedian) >= rowMedian) }
                             val padTop = if (inRow.any { !it.isAmplitude } || sides.any { it }) LABEL_PAD else 0.dp
@@ -238,7 +238,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                         Column(Modifier.weight(1f)) {
                             if (m.isAmplitude) {
                                 val win = window
-                                val base = win?.let { EcgRows.median(it, rowStartOf(m.aNs), rowStartOf(m.aNs) + rowNs) }
+                                val base = win?.let { 0f } // raw values: 0 mV is the H10's zero
                                 val v = win?.let { EcgSnap.valueAt(it, m.aNs) }
                                 Text(
                                     "${i + 1}.  " + if (v != null && base != null) String.format(java.util.Locale.ROOT, "%+.2f mV", v - base) else "– mV",
@@ -280,8 +280,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         ) { Text("Export PDF with my measurements") }
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
-"\"Amplitude\" labels a wave with its mV above (+) or below (−) the row's baseline (the median of the " +
-                "row, 0 on the scale). \"Snap to peak\" puts each point on the top or the bottom of the wave nearest to " +
+"\"Amplitude\" labels a wave with its raw mV as recorded by the H10 (0 mV is the H10's zero, the same in every row). \"Snap to peak\" puts each point on the top or the bottom of the wave nearest to " +
                 "your finger (within 150 ms), e.g. the tip of a beat or the bottom of the dip after it. Tops are " +
                 "labelled above, bottoms below. " +
                 "Snapping is good for the time from beat to beat. \"Free\" keeps the point where you tap, e.g. for the " +

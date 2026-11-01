@@ -47,14 +47,15 @@ directly.
   grid; time, bpm and the marker time are on a small line above each row, and
   arrows and mV numbers in a strip just outside the grid (only on rows with
   measurements); rows are packed onto the pages as tightly as they fit. An mV scale at the left of each row (0 = the
-  row's baseline, its median) reads the height of any wave.
+  H10's own zero: raw values, the same in every row and every PDF) reads the
+  height of any wave.
   **Personalize: measure intervals** opens the same rows in the app: tap two
   points (snapped to the top or bottom of the wave nearest to your finger,
   within 150 ms, or *free*), and a blue
   arrow shows the time in ms and as bpm (60 000 ÷ ms); *Landscape · 10-s rows*
   (A4 across, 250 mm per row) or *Portrait · 7-s rows* (A4 upright, 175 mm),
   shown and exported that way; in *Amplitude (mV)*
-  mode a tap labels a wave with its mV above or below the baseline (small black
+  mode a tap labels a wave with its raw mV (0 = the H10's zero; small black
   number above a top or below a bottom, joined to the point by a light dashed
   line, never over the trace); zoom 1–4×, normal or
   shifted rows, delete; saved per marker (`measurements_<day>.csv`) and

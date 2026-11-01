@@ -20,15 +20,14 @@ import kotlin.math.ceil
 private val GRID_MINOR = Color(0xFFF6C9C9)
 private val GRID_MAJOR = Color(0xFFE59A9A)
 
-/** Phone rows: how many mV fit above and below the baseline (0.5-mV steps). */
+/** Phone rows: how many mV fit above and below 0 mV (0.5-mV steps). */
 class PaperRows(val upMv: Float, val downMv: Float) {
     val spanMv: Float get() = upMv + downMv
 }
 
 /**
  * The grid of a row from the highest and lowest point between [fromNs] and [toNs] (one row
- * when the range is one row; each row's signal is drawn around its own baseline, the row
- * median), each rounded outwards to the next 0.5 mV and no more (+2.37 / -1.67 mV gives
+ * when the range is one row; raw values, 0 mV = the H10's zero), each rounded outwards to the next 0.5 mV and no more (+2.37 / -1.67 mV gives
  * +2.5 / -2.0). Labels go outside the grid (see [drawPaperRow]'s padding).
  */
 fun paperRows(w: EcgWindow, fromNs: Long, toNs: Long, rowNs: Long): PaperRows {
@@ -56,7 +55,7 @@ class PaperRow(
 }
 
 /**
- * One row of ECG paper: the mV scale in a gutter on the left (0 = the row's baseline), the
+ * One row of ECG paper: the mV scale in a gutter on the left (0 = 0 mV (the H10's zero)), the
  * grid (0.2 s and 0.5 mV thick lines, 0.04 s fine lines), and the signal in black. The grid
  * fills the canvas except [padTop] / [padBottom] pixels kept free for labels.
  */
@@ -72,7 +71,7 @@ fun DrawScope.drawPaperRow(
     val pxPerS = width / seconds
     val pxPerMv = height / rows.spanMv
     val baseY = gridTop + rows.upMv * pxPerMv
-    val median = EcgRows.median(w, rowStart, rowStart + rowNs) ?: 0f
+    val median = 0f // raw values: 0 mV is the H10's zero in every row (no baseline subtracted)
     val row = PaperRow(rowStart, rowNs, gutter, pxPerS, pxPerMv, baseY, median)
 
     drawRect(Color.White, topLeft = Offset(gutter, gridTop), size = androidx.compose.ui.geometry.Size(width, height))
@@ -113,7 +112,7 @@ fun DrawScope.drawPaperRow(
 }
 
 /**
- * The mV of one point above or below the row's baseline: a small black number next to the
+ * The mV of one point above or below 0 mV (the H10's zero): a small black number next to the
  * wave, above a top and below a bottom (for a point placed freely: above if it is above the
  * baseline), clear of the trace, with a light dashed line from just above (or under) the
  * point to the number, so it is clear which point it belongs to.

@@ -278,7 +278,7 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
     }
 
     if (personalizing) {
-        PersonalizeScreen(marker, fromNs, toNs, hr, onBack = { personalizing = false })
+        PersonalizeScreen(marker, fromNs, toNs, onBack = { personalizing = false })
         return
     }
 
@@ -321,7 +321,7 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
                 exportMessage = "Making the PDF…"
                 scope.launch {
                     val result = withContext(Dispatchers.IO) {
-                        runCatching { ReportPdf.marker(context, marker, w, fromNs, toNs, hr) }
+                        runCatching { ReportPdf.marker(context, marker, w, fromNs, toNs) }
                     }
                     result.onSuccess {
                         exportMessage = null
@@ -343,7 +343,7 @@ private fun MarkerReport(marker: Marker, onBack: () -> Unit, onChanged: (Marker)
                             val from = fromNs - ReportPdf.HALF_ROW_NS
                             val to = toNs + ReportPdf.HALF_ROW_NS
                             val w = SignalReaders.ecg(Storage.root(context), zone, from, to)
-                            ReportPdf.marker(context, marker, w, from, to, hr, shifted = true)
+                            ReportPdf.marker(context, marker, w, from, to, shifted = true)
                         }
                     }
                     result.onSuccess {

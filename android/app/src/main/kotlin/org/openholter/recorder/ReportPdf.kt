@@ -118,10 +118,11 @@ object ReportPdf {
         }
         return ecg(
             context, "Symptom marker – ${DATE_TIME.format(local(marker.timestampNs, zone))} (${zone.id})",
-            marker.comment, info, w, fromNs, toNs, listOf(marker.timestampNs), fitRows = true,
+            marker.comment, info, w, fromNs, toNs, listOf(marker.timestampNs),
             "open-holter_marker_${FILE_STAMP.format(local(marker.timestampNs, zone))}" +
                 (if (shifted) "_shifted" else "") + (if (measurements.isNotEmpty()) "_measured" else ""),
             measurements,
+            fitRows = true,
         )
     }
 

@@ -108,29 +108,34 @@ fun DrawScope.drawPaperRow(
 
 /**
  * The mV of one point above or below the row's baseline: a small black number next to the
- * wave (above a positive one, below a negative one), joined to the point by a short light
- * dashed line, never drawn over the trace.
+ * wave, above a top and below a bottom (for a point placed freely: above if it is above the
+ * baseline), clear of the trace, with a light dashed line from just above (or under) the
+ * point to the number, so it is clear which point it belongs to.
  */
 fun DrawScope.drawAmplitudeLabel(w: EcgWindow, row: PaperRow, tNs: Long, measurer: TextMeasurer) {
     if (tNs !in row.rowStart until row.rowStart + row.rowNs) return
     val v = EcgSnap.valueAt(w, tNs) ?: return
     val d = v - row.median
+    val above = EcgSnap.kind(w, tNs) ?: (d >= 0)
+    val y = row.yOfMv(v)
+    // Keep the number clear of the trace around the point.
     val i0 = w.t.binarySearch(tNs - 60_000_000L).let { if (it < 0) -it - 1 else it }
     val i1 = w.t.binarySearch(tNs + 60_000_001L).let { if (it < 0) -it - 1 else it }
-    var yExt = row.yOfMv(v)
+    var yExt = y
     for (i in i0 until i1) {
-        val y = row.yOfMv(w.mv[i])
-        yExt = if (d >= 0) minOf(yExt, y) else maxOf(yExt, y)
+        val yi = row.yOfMv(w.mv[i])
+        yExt = if (above) minOf(yExt, yi) else maxOf(yExt, yi)
     }
     val layout = measurer.measure(String.format(Locale.ROOT, "%+.2f mV", d), TextStyle(fontSize = 10.sp, color = Color.Black))
     val x = row.xOf(tNs)
-    val gap = 10f
-    val textTop = if (d >= 0) (yExt - gap - layout.size.height).coerceAtLeast(0f)
-    else (yExt + gap).coerceAtMost(size.height - layout.size.height)
-    val leadTo = if (d >= 0) textTop + layout.size.height else textTop
+    val minLead = 28f
+    val textTop = if (above) (minOf(yExt - 8f, y - minLead) - layout.size.height).coerceAtLeast(0f)
+    else maxOf(yExt + 8f, y + minLead).coerceAtMost(size.height - layout.size.height)
+    val leadFrom = if (above) y - 4f else y + 4f
+    val leadTo = if (above) textTop + layout.size.height + 1f else textTop - 1f
     drawLine(
-        Color.Black.copy(alpha = 0.45f), Offset(x, row.yOfMv(v) + if (d >= 0) -3f else 3f), Offset(x, leadTo),
-        strokeWidth = 1.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
+        Color.Black.copy(alpha = 0.6f), Offset(x, leadFrom), Offset(x, leadTo),
+        strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)),
     )
     val tx = (x - layout.size.width / 2f).coerceIn(row.gutter, size.width - layout.size.width)
     drawText(layout, topLeft = Offset(tx, textTop))

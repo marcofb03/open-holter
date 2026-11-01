@@ -313,8 +313,8 @@ object ReportPdf {
 
     /**
      * The mV of one point (above or below the row's baseline) as a small black number next to
-     * the wave, never on the trace: above a positive wave, below a negative one, joined to the
-     * point by a short light dashed line.
+     * the wave, never on the trace: above a top, below a bottom (a freely placed point: above if
+     * above the baseline), with a light dashed line from just above (or under) the point to it.
      */
     private fun drawAmplitude(
         c: Canvas, w: EcgWindow, tNs: Long, rowStart: Long, rowEnd: Long, top: Float, height: Float,
@@ -323,24 +323,29 @@ object ReportPdf {
         if (tNs !in rowStart until rowEnd) return
         val v = EcgSnap.valueAt(w, tNs) ?: return
         val d = v - median
+        val above = EcgSnap.kind(w, tNs) ?: (d >= 0)
         val yOf = { mv: Float -> baseY - (mv - median) * MM_PER_MV * PT_PER_MM }
+        val y = yOf(v)
         // The trace's extreme around the point, so the number stays clear of it.
         val i0 = w.t.binarySearch(tNs - 60_000_000L).let { if (it < 0) -it - 1 else it }
         val i1 = w.t.binarySearch(tNs + 60_000_001L).let { if (it < 0) -it - 1 else it }
-        var yExt = yOf(v)
-        for (i in i0 until i1) yExt = if (d >= 0) minOf(yExt, yOf(w.mv[i])) else maxOf(yExt, yOf(w.mv[i]))
+        var yExt = y
+        for (i in i0 until i1) yExt = if (above) minOf(yExt, yOf(w.mv[i])) else maxOf(yExt, yOf(w.mv[i]))
         val x = xOf(tNs)
         val text = String.format(java.util.Locale.ROOT, "%+.2f mV", d)
         val tp = Paint(label).apply { color = Color.BLACK; textSize = 6.5f }
         val tw = tp.measureText(text)
-        val textY = if (d >= 0) (yExt - 5f).coerceAtLeast(top + 7f) else (yExt + 10f).coerceAtMost(top + height - 2f)
+        val minLead = 9f
+        val textY = if (above) minOf(yExt - 4f, y - minLead).coerceAtLeast(top + 7f)
+        else (maxOf(yExt + 4f, y + minLead) + 6f).coerceAtMost(top + height - 2f)
         val lead = Paint().apply {
-            color = Color.argb(150, 0, 0, 0); strokeWidth = 0.4f; isAntiAlias = true
-            pathEffect = android.graphics.DashPathEffect(floatArrayOf(1.2f, 1.2f), 0f)
+            color = Color.argb(170, 0, 0, 0); strokeWidth = 0.5f; isAntiAlias = true
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(1.5f, 1f), 0f)
         }
-        val leadEnd = if (d >= 0) textY + 1f else textY - 7f
-        c.drawLine(x, yOf(v) + if (d >= 0) -1.5f else 1.5f, x, leadEnd, lead)
-        c.drawText(text, x - tw / 2, textY, tp)
+        val leadFrom = if (above) y - 1.5f else y + 1.5f
+        val leadTo = if (above) textY + 1.5f else textY - 6.5f
+        c.drawLine(x, leadFrom, x, leadTo, lead)
+        c.drawText(text, (x - tw / 2).coerceAtLeast(xOf(rowStart) + 1f), textY, tp)
     }
 
     /**

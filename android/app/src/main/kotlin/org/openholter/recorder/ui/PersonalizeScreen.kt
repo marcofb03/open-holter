@@ -104,12 +104,16 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
     val rows = ceil((rowsTo - rowsFrom).toDouble() / ROW_NS).toInt()
     val rowStartOf = { t: Long -> rowsFrom + Math.floorDiv(t - rowsFrom, ROW_NS) * ROW_NS }
 
-    fun tap(tNs: Long) {
+    /**
+     * A tap at time [tNs] and height [tapMv]. With "Snap to peak" the point goes to the top or
+     * bottom of the wave nearest to the finger on the screen ([nsPerPx], [mvPerPx]), within 150 ms.
+     */
+    fun tap(tNs: Long, tapMv: Float, nsPerPx: Double, mvPerPx: Double) {
         val w = window ?: return
+        val snapped = { if (snapToPeak) EcgSnap.nearestExtremum(w, tNs, tapMv, nsPerPx, mvPerPx)?.tNs else EcgSnap.nearest(w, tNs) }
         if (amplitudeMode) {
             pending = null
-            val base = EcgRows.median(w, rowStartOf(tNs), rowStartOf(tNs) + ROW_NS) ?: return
-            val point = (if (snapToPeak) EcgSnap.extreme(w, tNs, base) else EcgSnap.nearest(w, tNs)) ?: return
+            val point = snapped() ?: return
             val m = Measurement(point, point)
             if (m !in measurements) {
                 measurements = (measurements + m).sortedBy { it.aNs }
@@ -117,7 +121,7 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
             }
             return
         }
-        val point = (if (snapToPeak) EcgSnap.peak(w, tNs) else EcgSnap.nearest(w, tNs)) ?: return
+        val point = snapped() ?: return
         val first = pending
         if (first == null) {
             pending = point
@@ -182,10 +186,18 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
                             )
                             Canvas(
                                 Modifier.fillMaxWidth().height((paper.spanMv * 40).dp)
-                                    .pointerInput(rowStart, snapToPeak, amplitudeMode, pending, window, shifted) {
+                                    .pointerInput(rowStart, snapToPeak, amplitudeMode, pending, window, shifted, paper) {
                                         detectTapGestures { pos ->
                                             if (pos.x >= gutterPx) {
-                                                tap(rowStart + ((pos.x - gutterPx) / (size.width - gutterPx) * ROW_NS).toLong())
+                                                // Same geometry as drawPaperRow: time from x, mV from y.
+                                                val rowW = size.width - gutterPx
+                                                val pxPerMv = size.height / paper.spanMv
+                                                val median = EcgRows.median(w, rowStart, rowStart + ROW_NS) ?: 0f
+                                                val tapMv = median + (paper.upMv * pxPerMv - pos.y) / pxPerMv
+                                                tap(
+                                                    rowStart + ((pos.x - gutterPx) / rowW * ROW_NS).toLong(), tapMv,
+                                                    nsPerPx = ROW_NS / rowW.toDouble(), mvPerPx = 1.0 / pxPerMv,
+                                                )
                                             }
                                         }
                                     },
@@ -248,9 +260,10 @@ fun PersonalizeScreen(marker: Marker, fromNs: Long, toNs: Long, onBack: () -> Un
         exportMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(
 "\"Amplitude\" labels a wave with its mV above (+) or below (−) the row's baseline (the median of the " +
-                "row, 0 on the scale); with \"Snap to peak\" it takes the farthest point within 50 ms. " +
-                "\"Snap to peak\" puts each point on the highest point of the signal within 50 ms of your tap (the tip " +
-                "of a beat), good for the time from beat to beat. \"Free\" keeps the point where you tap, e.g. for the " +
+                "row, 0 on the scale). \"Snap to peak\" puts each point on the top or the bottom of the wave nearest to " +
+                "your finger (within 150 ms), e.g. the tip of a beat or the bottom of the dip after it. Tops are " +
+                "labelled above, bottoms below. " +
+                "Snapping is good for the time from beat to beat. \"Free\" keeps the point where you tap, e.g. for the " +
                 "start and end of one beat; zoom in for that. The H10 records every 7.7 ms, so a measurement is " +
                 "accurate to about ±8 ms. bpm = 60 000 ÷ ms. Not a medical device.",
             style = MaterialTheme.typography.bodySmall,

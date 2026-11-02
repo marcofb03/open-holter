@@ -30,6 +30,8 @@ Resumable by design (cluster jobs are killed at their time limit):
     15) and when the job receives SIGUSR1 / SIGTERM (sbatch --signal=B:USR1@600);
   * on start, <run>/last.pt is loaded if present, so resubmitting the same command
     (submit_chain.sh) simply continues; the data stream resumes at the exact chunk;
+  * --init <best.pt>: a new run starts from earlier fine-tuned weights (e.g. to continue
+    on more sources); its starting weights are validated first;
   * once <run>/DONE exists, later jobs of the chain exit at once. Delete DONE (and pass
     a larger --epochs or --purge-days 0) to continue a run elsewhere, e.g. on a GPU.
 
@@ -253,6 +255,8 @@ def main() -> None:
     ap.add_argument("--conversion", choices=["frames", "fixed", "random"], default="frames")
     ap.add_argument("--no-augment", action="store_true", help="same as --conversion fixed")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--init", type=Path, default=None,
+                    help="start a new run from these weights (e.g. an earlier run's best.pt); ignored once <run>/last.pt exists")
     args = ap.parse_args()
 
     t_start = time.time()
@@ -334,6 +338,10 @@ def main() -> None:
             next_val = step + 1  # score the current weights on the new set right away
         print(f"resumed at step {step} (epoch {train_s.epoch}, chunk {train_s.pos}), lr {opt.param_groups[0]['lr']:.2e}, "
               f"best {best:.4f}, {plateau.bad} validations without gain", file=sys.stderr)
+    elif args.init:
+        net.load_state_dict(torch.load(args.init, map_location=args.device, weights_only=True)["model"])
+        next_val = 1  # score the starting weights first: best.pt can only get better than them
+        print(f"initialised from {args.init}", file=sys.stderr)
     print(f"{name}: {steps_per_epoch} steps per epoch, cap {total} steps, validation every {val_steps} steps on "
           f"{min(val_chunks, len(val_s.index)) * 256} examples", file=sys.stderr, flush=True)
 

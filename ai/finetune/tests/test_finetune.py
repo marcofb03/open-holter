@@ -252,6 +252,12 @@ def test_train_switches_to_valset_runs_on_and_rescores(tmp_path):
     assert "-> stop" not in r.stderr and '"reason": "max_epochs"' in (tmp_path / "run" / "DONE").read_text()
     r = subprocess.run(run + ["--eval", str(tmp_path / "run" / "best.pt")], capture_output=True, text=True, timeout=600)
     assert r.returncode == 0 and (tmp_path / "run" / "rescore.json").exists(), r.stderr[-1500:]
+    # a new run that starts from the best weights: they are validated before the first step
+    run2 = [a if a != str(tmp_path / "run") else str(tmp_path / "run2") for a in run]
+    r = subprocess.run(run2 + ["--epochs", "0.5", "--init", str(tmp_path / "run" / "best.pt")], capture_output=True,
+                       text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert "initialised from" in r.stderr and "val step 1 " in r.stderr
 
 
 def test_prep_extra_source_keeps_only_labelled_windows(monkeypatch):

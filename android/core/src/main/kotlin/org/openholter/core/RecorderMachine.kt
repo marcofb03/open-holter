@@ -16,7 +16,8 @@ package org.openholter.core
  *   [Config.maxStreamRestarts] restarts → full reconnect.
  * - No skin contact for [Config.noContactStopMs] (strap taken off without
  *   pausing) → stop streams so the H10 can go to sleep; restart them as soon
- *   as contact is back.
+ *   as the H10 reports real contact again (contact = true and supported =
+ *   true). Samples with supported = false are ignored.
  */
 class RecorderMachine(
     private val config: Config = Config(),
@@ -171,13 +172,20 @@ class RecorderMachine(
             else -> s
         }
 
+        // The H10 sometimes sends a sample with contactStatusSupported = false
+        // (about 45 per hour, also right after streams are stopped). Such a
+        // sample says nothing about the strap: it must neither reset the
+        // no-contact timer nor count as "contact back". Treating it as contact
+        // restarted the streams every ~3 min all night with the strap off and
+        // drained the H10 battery (100 % → 20 % in two days, Nov 2026).
         is Event.Contact -> when (s) {
             is State.Streaming -> when {
-                !e.supported || e.contact -> s.copy(noContactSinceMs = null)
+                !e.supported -> s
+                e.contact -> s.copy(noContactSinceMs = null)
                 s.noContactSinceMs == null -> s.copy(noContactSinceMs = now)
                 else -> s
             }
-            is State.NoContact -> if (e.contact || !e.supported) {
+            is State.NoContact -> if (e.supported && e.contact) {
                 out += Action.StartStreams(s.deviceId)
                 out += Action.Log("contact_back", "streams restarted")
                 State.Streaming(s.deviceId, now, now)

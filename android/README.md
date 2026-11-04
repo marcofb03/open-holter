@@ -104,7 +104,13 @@ off the strap. The app handles this as follows:
   (`RecorderMachineTest`, including a randomised test).
 - If the strap reports **no skin contact for 3 minutes** (strap taken off
   without pressing Stop), ECG and ACC are stopped. Heart rate keeps running,
-  and ECG restarts as soon as there is contact again.
+  and ECG restarts as soon as the H10 reports real contact again
+  (`contact = 1` with `contact_supported = 1`). The H10 now and then sends a
+  sample with `contact_supported = 0` (about 45 per hour, also right after the
+  streams stop). Such samples are ignored: earlier versions took them as
+  "contact back" and restarted the streams every ~3 minutes all night with
+  the strap off (`no_contact` / `contact_back` pairs in the events log), which
+  emptied the H10 battery in about two days.
 - **Tap "Stop recording" before you take the strap off.** It is the clean
   way to do it.
 

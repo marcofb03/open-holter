@@ -131,6 +131,71 @@ class RecorderMachineTest {
     }
 
     @Test
+    fun `unsupported contact sample does not restart streams`() {
+        // Seen on a real H10 (Nov 2026): right after the streams were stopped it sent
+        // contact=false, supported=false. That used to count as "contact back" and
+        // restarted the streams every ~3 min all night with the strap off.
+        streaming()
+        send(Event.Contact(false))
+        now += 180_000
+        send(Event.Tick)
+        assertTrue(m.state is State.NoContact)
+        assertEquals(emptyList<Action>(), send(Event.Contact(false, supported = false)).ble())
+        assertEquals(emptyList<Action>(), send(Event.Contact(true, supported = false)).ble())
+        assertEquals(emptyList<Action>(), send(Event.Contact(false)).ble())
+        assertTrue(m.state is State.NoContact)
+        // Real contact restarts.
+        assertEquals(listOf(Action.StartStreams(id)), send(Event.Contact(true)).ble())
+        assertTrue(m.state is State.Streaming)
+    }
+
+    @Test
+    fun `unsupported contact sample does not reset the no-contact timer`() {
+        streaming()
+        send(Event.Contact(false))
+        now += 90_000
+        send(Event.EcgData)
+        send(Event.Contact(false, supported = false))
+        send(Event.Contact(false))
+        now += 90_000
+        send(Event.EcgData)
+        assertEquals(listOf(Action.StopStreams(id)), send(Event.Tick).ble())
+        assertTrue(m.state is State.NoContact)
+    }
+
+    @Test
+    fun `strap off all night stops streams once and does not loop`() {
+        // Replays the pattern of the Nov 3-4 night: contact=false about once a second
+        // with an occasional supported=false sample, for 8 hours.
+        streaming()
+        var starts = 0
+        var stops = 0
+        repeat(8 * 3600) { k ->
+            now += 1_000
+            val e = if (k % 80 == 0) Event.Contact(false, supported = false) else Event.Contact(false)
+            for (a in send(Event.EcgData) + send(e) + send(Event.Tick)) {
+                if (a is Action.StartStreams) starts++
+                if (a is Action.StopStreams) stops++
+            }
+        }
+        assertEquals(1, stops)
+        assertEquals(0, starts)
+        assertTrue(m.state is State.NoContact)
+    }
+
+    @Test
+    fun `strap without contact support keeps streaming`() {
+        streaming()
+        repeat(600) {
+            now += 1_000
+            send(Event.EcgData)
+            send(Event.Contact(false, supported = false))
+            assertEquals(emptyList<Action>(), send(Event.Tick).ble())
+        }
+        assertTrue(m.state is State.Streaming)
+    }
+
+    @Test
     fun `brief contact loss is tolerated`() {
         streaming()
         send(Event.Contact(false))
@@ -184,7 +249,8 @@ class RecorderMachineTest {
         val events = listOf(
             Event.Pause, Event.Resume, Event.Stop, Event.Start(id), Event.Start("OTHER123"),
             Event.DeviceConnected(id), Event.DeviceDisconnected(id), Event.StreamingReady(id), Event.EcgData,
-            Event.Contact(false), Event.Contact(true), Event.BluetoothPower(false), Event.BluetoothPower(true),
+            Event.Contact(false), Event.Contact(true), Event.Contact(false, supported = false),
+            Event.BluetoothPower(false), Event.BluetoothPower(true),
             Event.Tick,
         )
         val rnd = java.util.Random(42)

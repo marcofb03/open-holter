@@ -258,6 +258,26 @@ def test_train_switches_to_valset_runs_on_and_rescores(tmp_path):
                        text=True, timeout=600)
     assert r.returncode == 0, r.stderr[-1500:]
     assert "initialised from" in r.stderr and "val step 1 " in r.stderr
+    # ... and the next job of its chain resumes it (its last.pt once held a pathlib path from --init)
+    (tmp_path / "run2" / "DONE").unlink()
+    r = subprocess.run(run2 + ["--epochs", "1", "--init", str(tmp_path / "run" / "best.pt")], capture_output=True,
+                       text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert "resumed at step" in r.stderr and "initialised from" not in r.stderr
+
+
+def test_checkpoint_with_pathlib_args_still_loads(tmp_path):
+    """last.pt files written before 2026-11-04 kept Path objects in "args"; they must resume."""
+    torch = pytest.importorskip("torch")
+    import train
+
+    p = tmp_path / "last.pt"
+    torch.save({"model": {}, "step": 7, "args": {"init": Path("/x/best.pt"), "run": "r"}}, p)
+    with pytest.raises(Exception):
+        torch.load(p, map_location="cpu", weights_only=True)
+    assert train.load_ckpt(p, "cpu")["step"] == 7
+    train.save(p, {"args": json.loads(json.dumps({"init": Path("/x/best.pt")}, default=str))})
+    assert torch.load(p, map_location="cpu", weights_only=True)["args"]["init"] == "/x/best.pt"
 
 
 def test_prep_extra_source_keeps_only_labelled_windows(monkeypatch):

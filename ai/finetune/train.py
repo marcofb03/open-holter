@@ -220,6 +220,17 @@ def save(path: Path, obj: dict) -> None:
     os.replace(tmp, path)
 
 
+def load_ckpt(path: Path, device: str) -> dict:
+    """torch.load(weights_only=True) that also accepts the pathlib paths that checkpoints written
+    before 2026-11-04 kept in "args" (an --init run's last.pt could not be resumed)."""
+    import pathlib
+
+    import torch
+
+    with torch.serialization.safe_globals([pathlib.PosixPath, pathlib.WindowsPath]):
+        return torch.load(path, map_location=device, weights_only=True)
+
+
 def main() -> None:
     import torch
 
@@ -313,7 +324,7 @@ def main() -> None:
     if args.eval:  # re-score saved checkpoints on the (new) validation set, nothing else
         res = {}
         for ckp in args.eval:
-            ck = torch.load(ckp, map_location=args.device, weights_only=True)
+            ck = load_ckpt(ckp, args.device)
             net.load_state_dict(ck["model"])
             res[str(ckp)] = validate(net, name, val_s, val_chunks, args.bf16, lossf) | {"step": ck.get("step"), "val_id": val_id}
             print(f"{ckp}: {json.dumps(res[str(ckp)])}", file=sys.stderr, flush=True)
@@ -322,7 +333,7 @@ def main() -> None:
     step, best, log, next_val, recent = 0, -1.0, [], val_steps, []
     last = args.run / "last.pt"
     if last.exists():
-        ck = torch.load(last, map_location=args.device, weights_only=True)
+        ck = load_ckpt(last, args.device)
         net.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])  # includes the current (possibly reduced) learning rates
         train_s.load_state(ck["stream"])
@@ -339,7 +350,7 @@ def main() -> None:
         print(f"resumed at step {step} (epoch {train_s.epoch}, chunk {train_s.pos}), lr {opt.param_groups[0]['lr']:.2e}, "
               f"best {best:.4f}, {plateau.bad} validations without gain", file=sys.stderr)
     elif args.init:
-        net.load_state_dict(torch.load(args.init, map_location=args.device, weights_only=True)["model"])
+        net.load_state_dict(load_ckpt(args.init, args.device)["model"])
         next_val = 1  # score the starting weights first: best.pt can only get better than them
         print(f"initialised from {args.init}", file=sys.stderr)
     print(f"{name}: {steps_per_epoch} steps per epoch, cap {total} steps, validation every {val_steps} steps on "
@@ -356,7 +367,7 @@ def main() -> None:
         save(last, {"model": net.state_dict(), "opt": opt.state_dict(), "stream": train_s.state(), "step": step,
                     "best": best, "log": log, "next_val": next_val, "plateau": plateau.state(),
                     "val_id": val_id, "recent": recent,
-                    "args": vars(args) | {"shards": str(args.shards), "run": str(args.run)}})
+                    "args": json.loads(json.dumps(vars(args), default=str))})  # plain types: Path is not weights_only-safe
 
     def finish(reason: str, v: dict | None) -> None:
         checkpoint()
